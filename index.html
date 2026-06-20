@@ -3,108 +3,250 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Форма</title>
+  <title>Психологический помощник</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     :root {
       --bg: var(--tg-theme-bg-color, #ffffff);
-      --text: var(--tg-theme-text-color, #000000);
-      --hint: var(--tg-theme-hint-color, #999999);
+      --text: var(--tg-theme-text-color, #1a1a1a);
+      --hint: var(--tg-theme-hint-color, #8e8e93);
       --link: var(--tg-theme-link-color, #2481cc);
       --btn: var(--tg-theme-button-color, #2481cc);
       --btn-text: var(--tg-theme-button-text-color, #ffffff);
-      --secondary-bg: var(--tg-theme-secondary-bg-color, #f1f1f1);
+      --secondary-bg: var(--tg-theme-secondary-bg-color, #f3f3f6);
     }
-    * { box-sizing: border-box; }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: var(--bg); color: var(--text);
-      margin: 0; padding: 18px; font-size: 16px;
+      margin: 0; padding: 0; font-size: 17px; line-height: 1.5;
     }
-    h1 { font-size: 20px; margin: 0 0 4px; }
-    .sub { color: var(--hint); font-size: 14px; margin: 0 0 20px; }
-    label { display: block; font-size: 14px; font-weight: 600; margin: 16px 0 6px; }
-    .req { color: #e53935; }
-    input, select, textarea {
-      width: 100%; padding: 12px 14px; font-size: 16px;
-      border: 1px solid var(--hint); border-radius: 10px;
+    /* Контейнер страницы + плавный fade */
+    #app {
+      min-height: 100vh;
+      display: flex; flex-direction: column; justify-content: center;
+      padding: 32px 22px 40px;
+      opacity: 1;
+      transition: opacity .55s ease;
+    }
+    #app.fade-out { opacity: 0; }
+
+    .progress { color: var(--hint); font-size: 13px; letter-spacing: .04em;
+      text-transform: uppercase; margin-bottom: 14px; }
+
+    .comment {
+      color: var(--hint); font-size: 16px; font-style: italic;
+      line-height: 1.6; border-left: 3px solid var(--btn);
+      padding: 4px 0 4px 16px; margin: 0;
+    }
+    .question { font-size: 22px; font-weight: 600; line-height: 1.35; margin: 0 0 20px; }
+
+    .title { font-size: 26px; font-weight: 700; margin: 0 0 8px; }
+    .subtitle { color: var(--hint); font-size: 16px; margin: 0 0 28px; }
+
+    textarea {
+      width: 100%; padding: 14px 16px; font-size: 17px; font-family: inherit;
+      border: 1.5px solid transparent; border-radius: 14px;
       background: var(--secondary-bg); color: var(--text);
-      outline: none; font-family: inherit;
+      outline: none; min-height: 120px; resize: none; line-height: 1.5;
     }
-    input:focus, select:focus, textarea:focus { border-color: var(--btn); }
-    textarea { min-height: 90px; resize: vertical; }
-    .err { color: #e53935; font-size: 13px; margin-top: 4px; display: none; }
-    .err.show { display: block; }
-    .hint { color: var(--hint); font-size: 12px; margin-top: 4px; }
+    textarea:focus { border-color: var(--btn); }
+
+    .cat-btn {
+      display: block; width: 100%; text-align: left;
+      padding: 18px 20px; margin-bottom: 12px; font-size: 18px; font-weight: 600;
+      border: none; border-radius: 16px; background: var(--secondary-bg);
+      color: var(--text); cursor: pointer; transition: transform .1s ease;
+    }
+    .cat-btn:active { transform: scale(.98); }
+    .cat-btn[disabled] { opacity: .45; font-weight: 500; }
+    .cat-btn .cat-sub { display: block; font-size: 13px; font-weight: 400;
+      color: var(--hint); margin-top: 4px; }
+
+    .err { color: #e53935; font-size: 14px; margin-top: 10px; min-height: 18px; }
+    .hint-line { color: var(--hint); font-size: 13px; margin-top: 8px; }
   </style>
 </head>
 <body>
-  <h1>Заявка</h1>
-  <p class="sub">Заполни форму и нажми кнопку внизу — ответы придут боту.</p>
-
-  <form id="f">
-    <label>Имя <span class="req">*</span></label>
-    <input type="text" id="name" placeholder="Как тебя зовут?">
-    <div class="err" id="name-err">Укажи имя</div>
-
-    <label>Email</label>
-    <input type="email" id="email" placeholder="you@example.com">
-    <div class="err" id="email-err">Похоже на некорректный email</div>
-
-    <label>Тема обращения <span class="req">*</span></label>
-    <select id="topic">
-      <option value="">— выбери —</option>
-      <option>Вопрос</option>
-      <option>Предложение</option>
-      <option>Проблема</option>
-      <option>Другое</option>
-    </select>
-    <div class="err" id="topic-err">Выбери тему</div>
-
-    <label>Сообщение <span class="req">*</span></label>
-    <textarea id="message" placeholder="Опиши подробнее..."></textarea>
-    <div class="err" id="message-err">Напиши сообщение</div>
-    <div class="hint">Минимум 5 символов</div>
-  </form>
+  <div id="app"></div>
 
   <script>
     const tg = window.Telegram.WebApp;
     tg.ready();
     tg.expand();
 
-    const mainBtn = tg.MainButton;
-    mainBtn.setText("Отправить");
-    mainBtn.show();
+    // ── Контент категорий ───────────────────────────────────────────────
+    const CATEGORIES = {
+      procrastination: {
+        title: "Прокрастинация",
+        describePrompt: "Опишите конкретнее, своими словами: что именно вы откладываете и в какой ситуации?",
+        items: [
+          {
+            comment: "Вопросы про смысл помогают вспомнить, зачем это вообще нужно.",
+            question: "Что станет лучше через месяц/год, если я буду это делать регулярно?"
+          },
+          {
+            comment: "Иногда «не хочу» — это не лень, а страх, усталость, неясность или слишком большой объем.",
+            question: "Мне не хочется, потому что задача неприятная, слишком большая или непонятная?"
+          },
+          {
+            comment: "Когда задача кажется большой, мозг сопротивляется. Нужно уменьшить входной порог.",
+            question: "Что я могу сделать за 2 минуты?"
+          },
+          {
+            comment: "Когда «не хочется», мозг начинает торговаться: «потом», «завтра», «не сейчас». Тут помогают вопросы про честность.",
+            question: "Я правда выбираю не делать это или просто избегаю дискомфорта?"
+          },
+          {
+            comment: "Вопросы про идентичность помогают действовать не из настроения, а из образа человека, которым ты хочешь стать.",
+            question: "Как бы поступил человек, который серьезно относится к этой цели?"
+          },
+          {
+            comment: "Иногда нужно сделать действие эмоционально дешевле.",
+            question: "Как я могу сделать это чуть приятнее?"
+          },
+          {
+            comment: "Когда мотивации нет, лучше использовать не размышления, а запуск.",
+            question: "Могу ли я начать, не обещая закончить?"
+          }
+        ]
+      }
+      // сюда легко добавляются новые категории
+    };
 
-    function showErr(id, show) {
-      document.getElementById(id + "-err").classList.toggle("show", show);
+    // ── Состояние ────────────────────────────────────────────────────────
+    let state = { category: null, categoryTitle: null, description: null, answers: [] };
+    let pages = [];   // последовательность страниц после выбора категории
+    let idx = -1;     // -1 = экран выбора категории
+
+    const app = document.getElementById("app");
+    const mb = tg.MainButton;
+
+    // Единый обработчик MainButton
+    mb.onClick(handleNext);
+
+    function buildPages(catKey) {
+      const cat = CATEGORIES[catKey];
+      const p = [{ type: "describe" }];
+      cat.items.forEach((it, i) => {
+        p.push({ type: "comment", text: it.comment, qnum: i + 1 });
+        p.push({ type: "question", text: it.question, qnum: i + 1 });
+      });
+      return p;
     }
 
-    function validate() {
-      const name = document.getElementById("name").value.trim();
-      const email = document.getElementById("email").value.trim();
-      const topic = document.getElementById("topic").value;
-      const message = document.getElementById("message").value.trim();
-
-      let ok = true;
-      showErr("name", !name); if (!name) ok = false;
-      const emailBad = email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-      showErr("email", emailBad); if (emailBad) ok = false;
-      showErr("topic", !topic); if (!topic) ok = false;
-      showErr("message", message.length < 5); if (message.length < 5) ok = false;
-
-      return ok ? { name, email, topic, message } : null;
+    // Плавная смена страницы: fade-out → перерисовка → fade-in
+    function transitionTo(renderFn) {
+      app.classList.add("fade-out");
+      setTimeout(() => {
+        renderFn();
+        window.scrollTo(0, 0);
+        app.classList.remove("fade-out");
+      }, 550);
     }
 
-    mainBtn.onClick(() => {
-      const data = validate();
-      if (!data) {
-        tg.HapticFeedback.notificationOccurred("error");
+    // ── Рендеры ────────────────────────────────────────────────────────────
+    function renderCategory() {
+      mb.hide();
+      let html = `<div class="title">С какой проблемой поработаем?</div>
+        <div class="subtitle">Выберите тему — дальше пройдём её по шагам.</div>`;
+      for (const key in CATEGORIES) {
+        html += `<button class="cat-btn" data-cat="${key}">${CATEGORIES[key].title}</button>`;
+      }
+      html += `<button class="cat-btn" disabled>Другие темы
+        <span class="cat-sub">скоро</span></button>`;
+      app.innerHTML = html;
+      app.querySelectorAll(".cat-btn[data-cat]").forEach(b => {
+        b.onclick = () => chooseCategory(b.dataset.cat);
+      });
+    }
+
+    function chooseCategory(key) {
+      state.category = key;
+      state.categoryTitle = CATEGORIES[key].title;
+      pages = buildPages(key);
+      idx = 0;
+      tg.HapticFeedback.impactOccurred("light");
+      transitionTo(renderCurrentPage);
+    }
+
+    function renderCurrentPage() {
+      const page = pages[idx];
+      const total = CATEGORIES[state.category].items.length;
+
+      if (page.type === "describe") {
+        app.innerHTML = `
+          <div class="progress">${state.categoryTitle}</div>
+          <div class="question">Расскажите о ситуации</div>
+          <p class="comment" style="margin-bottom:20px">${CATEGORIES[state.category].describePrompt}</p>
+          <textarea id="input" placeholder="Опишите своими словами..."></textarea>
+          <div class="err" id="err"></div>`;
+        setupMainButton("Далее");
+      } else if (page.type === "comment") {
+        app.innerHTML = `
+          <div class="progress">Вопрос ${page.qnum} из ${total}</div>
+          <p class="comment">${page.text}</p>`;
+        setupMainButton("Далее");
+      } else if (page.type === "question") {
+        const isLast = idx === pages.length - 1;
+        app.innerHTML = `
+          <div class="progress">Вопрос ${page.qnum} из ${total}</div>
+          <div class="question">${page.text}</div>
+          <textarea id="input" placeholder="Ваш ответ..."></textarea>
+          <div class="err" id="err"></div>`;
+        setupMainButton(isLast ? "Готово" : "Далее");
+      }
+    }
+
+    function setupMainButton(text) {
+      mb.setText(text);
+      mb.show();
+      mb.enable();
+    }
+
+    // ── Логика «Далее» ──────────────────────────────────────────────────────
+    function handleNext() {
+      const page = pages[idx];
+
+      if (page.type === "describe") {
+        const v = (document.getElementById("input").value || "").trim();
+        if (v.length < 3) return showError("Опишите ситуацию хотя бы парой слов");
+        state.description = v;
+      } else if (page.type === "question") {
+        const v = (document.getElementById("input").value || "").trim();
+        if (v.length < 1) return showError("Напишите ответ, чтобы продолжить");
+        state.answers.push({ num: page.qnum, question: page.text, answer: v });
+      }
+
+      tg.HapticFeedback.impactOccurred("light");
+
+      if (idx >= pages.length - 1) {
+        submit();
         return;
       }
+      idx += 1;
+      transitionTo(renderCurrentPage);
+    }
+
+    function showError(msg) {
+      const e = document.getElementById("err");
+      if (e) e.textContent = msg;
+      tg.HapticFeedback.notificationOccurred("error");
+    }
+
+    function submit() {
       tg.HapticFeedback.notificationOccurred("success");
-      tg.sendData(JSON.stringify(data)); // отправляет данные боту и закрывает Mini App
-    });
+      tg.sendData(JSON.stringify({
+        category: state.category,
+        categoryTitle: state.categoryTitle,
+        description: state.description,
+        answers: state.answers
+      }));
+    }
+
+    // ── Старт ─────────────────────────────────────────────────────────────
+    renderCategory();
   </script>
 </body>
 </html>
