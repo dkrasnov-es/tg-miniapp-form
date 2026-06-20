@@ -66,6 +66,15 @@
 
     .err { color: #e53935; font-size: 14px; margin-top: 10px; min-height: 18px; }
     .hint-line { color: var(--hint); font-size: 13px; margin-top: 8px; }
+
+    /* Итоговая страница */
+    #app.top { justify-content: flex-start; }
+    .sum-block { margin-bottom: 18px; }
+    .sum-label { font-size: 13px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .04em; color: var(--hint); margin-bottom: 6px; }
+    .sum-q { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+    .sum-text { background: var(--secondary-bg); border-radius: 12px;
+      padding: 12px 14px; white-space: pre-wrap; line-height: 1.5; }
   </style>
 </head>
 <body>
@@ -133,7 +142,13 @@
         p.push({ type: "comment", text: it.comment, qnum: i + 1 });
         p.push({ type: "question", text: it.question, qnum: i + 1 });
       });
+      p.push({ type: "summary" });
       return p;
+    }
+
+    function esc(s) {
+      return (s || "").replace(/[&<>"]/g, c =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     }
 
     // Плавная смена страницы: fade-out → перерисовка → fade-in
@@ -174,6 +189,7 @@
     function renderCurrentPage() {
       const page = pages[idx];
       const total = CATEGORIES[state.category].items.length;
+      app.classList.toggle("top", page.type === "summary");
 
       if (page.type === "describe") {
         app.innerHTML = `
@@ -189,13 +205,27 @@
           <p class="comment">${page.text}</p>`;
         setupMainButton("Далее");
       } else if (page.type === "question") {
-        const isLast = idx === pages.length - 1;
         app.innerHTML = `
           <div class="progress">Вопрос ${page.qnum} из ${total}</div>
           <div class="question">${page.text}</div>
           <textarea id="input" placeholder="Ваш ответ..."></textarea>
           <div class="err" id="err"></div>`;
-        setupMainButton(isLast ? "Готово" : "Далее");
+        setupMainButton("Далее");
+      } else if (page.type === "summary") {
+        let html = `<div class="progress">${esc(state.categoryTitle)} · итог</div>
+          <div class="title" style="margin-bottom:20px">Проверьте ответы</div>
+          <div class="sum-block">
+            <div class="sum-label">Ситуация</div>
+            <div class="sum-text">${esc(state.description)}</div>
+          </div>`;
+        state.answers.forEach(a => {
+          html += `<div class="sum-block">
+            <div class="sum-q">${a.num}. ${esc(a.question)}</div>
+            <div class="sum-text">${esc(a.answer)}</div>
+          </div>`;
+        });
+        app.innerHTML = html;
+        setupMainButton("Сохранить");
       }
     }
 
@@ -217,14 +247,12 @@
         const v = (document.getElementById("input").value || "").trim();
         if (v.length < 1) return showError("Напишите ответ, чтобы продолжить");
         state.answers.push({ num: page.qnum, question: page.text, answer: v });
-      }
-
-      tg.HapticFeedback.impactOccurred("light");
-
-      if (idx >= pages.length - 1) {
+      } else if (page.type === "summary") {
         submit();
         return;
       }
+
+      tg.HapticFeedback.impactOccurred("light");
       idx += 1;
       transitionTo(renderCurrentPage);
     }
