@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Форма</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      --bg: var(--tg-theme-bg-color, #ffffff);
+      --text: var(--tg-theme-text-color, #000000);
+      --hint: var(--tg-theme-hint-color, #999999);
+      --link: var(--tg-theme-link-color, #2481cc);
+      --btn: var(--tg-theme-button-color, #2481cc);
+      --btn-text: var(--tg-theme-button-text-color, #ffffff);
+      --secondary-bg: var(--tg-theme-secondary-bg-color, #f1f1f1);
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text);
+      margin: 0; padding: 18px; font-size: 16px;
+    }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .sub { color: var(--hint); font-size: 14px; margin: 0 0 20px; }
+    label { display: block; font-size: 14px; font-weight: 600; margin: 16px 0 6px; }
+    .req { color: #e53935; }
+    input, select, textarea {
+      width: 100%; padding: 12px 14px; font-size: 16px;
+      border: 1px solid var(--hint); border-radius: 10px;
+      background: var(--secondary-bg); color: var(--text);
+      outline: none; font-family: inherit;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--btn); }
+    textarea { min-height: 90px; resize: vertical; }
+    .err { color: #e53935; font-size: 13px; margin-top: 4px; display: none; }
+    .err.show { display: block; }
+    .hint { color: var(--hint); font-size: 12px; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Заявка</h1>
+  <p class="sub">Заполни форму и нажми кнопку внизу — ответы придут боту.</p>
+
+  <form id="f">
+    <label>Имя <span class="req">*</span></label>
+    <input type="text" id="name" placeholder="Как тебя зовут?">
+    <div class="err" id="name-err">Укажи имя</div>
+
+    <label>Email</label>
+    <input type="email" id="email" placeholder="you@example.com">
+    <div class="err" id="email-err">Похоже на некорректный email</div>
+
+    <label>Тема обращения <span class="req">*</span></label>
+    <select id="topic">
+      <option value="">— выбери —</option>
+      <option>Вопрос</option>
+      <option>Предложение</option>
+      <option>Проблема</option>
+      <option>Другое</option>
+    </select>
+    <div class="err" id="topic-err">Выбери тему</div>
+
+    <label>Сообщение <span class="req">*</span></label>
+    <textarea id="message" placeholder="Опиши подробнее..."></textarea>
+    <div class="err" id="message-err">Напиши сообщение</div>
+    <div class="hint">Минимум 5 символов</div>
+  </form>
+
+  <script>
+    const tg = window.Telegram.WebApp;
+    tg.ready();
+    tg.expand();
+
+    const mainBtn = tg.MainButton;
+    mainBtn.setText("Отправить");
+    mainBtn.show();
+
+    function showErr(id, show) {
+      document.getElementById(id + "-err").classList.toggle("show", show);
+    }
+
+    function validate() {
+      const name = document.getElementById("name").value.trim();
+      const email = document.getElementById("email").value.trim();
+      const topic = document.getElementById("topic").value;
+      const message = document.getElementById("message").value.trim();
+
+      let ok = true;
+      showErr("name", !name); if (!name) ok = false;
+      const emailBad = email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+      showErr("email", emailBad); if (emailBad) ok = false;
+      showErr("topic", !topic); if (!topic) ok = false;
+      showErr("message", message.length < 5); if (message.length < 5) ok = false;
+
+      return ok ? { name, email, topic, message } : null;
+    }
+
+    mainBtn.onClick(() => {
+      const data = validate();
+      if (!data) {
+        tg.HapticFeedback.notificationOccurred("error");
+        return;
+      }
+      tg.HapticFeedback.notificationOccurred("success");
+      tg.sendData(JSON.stringify(data)); // отправляет данные боту и закрывает Mini App
+    });
+  </script>
+</body>
+</html>
