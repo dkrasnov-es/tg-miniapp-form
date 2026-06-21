@@ -68,6 +68,10 @@ const STYLE = `
     color: var(--hint); line-height: 1.45; white-space: pre-wrap; }
   .situation b { display: block; font-size: 11px; font-weight: 600;
     text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+  .role-q { margin-bottom: 20px; }
+  .role-q-text { font-size: 16px; font-weight: 600; line-height: 1.35; margin-bottom: 8px; }
+  .role-q textarea { min-height: 76px; }
+  .sum-role { font-size: 17px; font-weight: 700; margin: 24px 0 12px; }
 `;
 const styleEl = document.createElement("style");
 styleEl.textContent = STYLE;
@@ -147,6 +151,77 @@ const CATEGORIES = {
         question: "Что я могу улучшить в первую очередь?"
       }
     ]
+  },
+  council: {
+    title: "Совет семи ролей",
+    mode: "roles",
+    describeTitle: "Идея для развития продукта",
+    describePrompt: "Опишите своими словами идею для развития продукта.",
+    roles: [
+      {
+        title: "Клиент",
+        questions: [
+          "Какую реальную проблему это решает для меня?",
+          "В какой момент я буду этим пользоваться?",
+          "Что может раздражать или пугать меня?",
+          "За что я действительно согласился бы платить?"
+        ]
+      },
+      {
+        title: "Продавец",
+        questions: [
+          "Как объяснить ценность одним предложением?",
+          "Какое возражение клиента будет самым сильным?",
+          "Какое доказательство поможет закрыть продажу?",
+          "Почему клиент должен действовать сейчас?"
+        ]
+      },
+      {
+        title: "Продуктовый менеджер",
+        questions: [
+          "Какое поведение пользователя должно измениться?",
+          "Какой показатель подтвердит ценность?",
+          "Как проверить гипотезу без полноценной разработки?",
+          "Какая самая маленькая рабочая версия решения?"
+        ]
+      },
+      {
+        title: "Маркетолог",
+        questions: [
+          "Для какого сегмента это особенно важно?",
+          "Какими словами сам клиент описывает проблему?",
+          "В каком канале можно найти такого клиента?",
+          "Что заставит его обратить внимание?"
+        ]
+      },
+      {
+        title: "Финансовый директор",
+        questions: [
+          "Как это повлияет на выручку, удержание и расходы?",
+          "Какая здесь экономика на одного пользователя?",
+          "Что должно быть правдой, чтобы решение окупилось?",
+          "Какой финансовый риск мы недооцениваем?"
+        ]
+      },
+      {
+        title: "Операционный руководитель или разработчик",
+        questions: [
+          "Что станет сложным при росте в десять раз?",
+          "Какие зависимости и ограничения не учтены?",
+          "Что будет дорого поддерживать?",
+          "Как упростить решение в два раза?"
+        ]
+      },
+      {
+        title: "Инвестор или владелец бизнеса",
+        questions: [
+          "Соответствует ли это основной стратегии?",
+          "Создаёт ли это устойчивое преимущество?",
+          "Какие доказательства нужны перед серьёзными инвестициями?",
+          "Что мы не сможем сделать, если выберем это направление?"
+        ]
+      }
+    ]
   }
   // сюда легко добавляются новые категории
 };
@@ -163,10 +238,16 @@ mb.onClick(handleNext);
 function buildPages(catKey) {
   const cat = CATEGORIES[catKey];
   const p = [{ type: "describe" }];
-  cat.items.forEach((it, i) => {
-    p.push({ type: "comment", text: it.comment, qnum: i + 1 });
-    p.push({ type: "question", text: it.question, qnum: i + 1 });
-  });
+  if (cat.mode === "roles") {
+    cat.roles.forEach((r, i) => {
+      p.push({ type: "role", title: r.title, questions: r.questions, roleNum: i + 1, roleTotal: cat.roles.length });
+    });
+  } else {
+    cat.items.forEach((it, i) => {
+      p.push({ type: "comment", text: it.comment, qnum: i + 1 });
+      p.push({ type: "question", text: it.question, qnum: i + 1 });
+    });
+  }
   p.push({ type: "summary" });
   return p;
 }
@@ -211,14 +292,15 @@ function chooseCategory(key) {
 
 function renderCurrentPage() {
   const page = pages[idx];
-  const total = CATEGORIES[state.category].items.length;
-  app.classList.toggle("top", page.type === "summary" || page.type === "question");
+  const cat = CATEGORIES[state.category];
+  const total = (cat.items || []).length;
+  app.classList.toggle("top", page.type === "summary" || page.type === "question" || page.type === "role");
 
   if (page.type === "describe") {
     app.innerHTML = `
       <div class="progress">${state.categoryTitle}</div>
-      <div class="question">Расскажите о ситуации</div>
-      <p class="comment" style="margin-bottom:20px">${CATEGORIES[state.category].describePrompt}</p>
+      <div class="question">${cat.describeTitle || "Расскажите о ситуации"}</div>
+      <p class="comment" style="margin-bottom:20px">${cat.describePrompt}</p>
       <textarea id="input" placeholder="Опишите своими словами..."></textarea>
       <div class="err" id="err"></div>`;
     setupMainButton("Далее");
@@ -235,6 +317,19 @@ function renderCurrentPage() {
       <textarea id="input" placeholder="Ваш ответ..."></textarea>
       <div class="err" id="err"></div>`;
     setupMainButton("Далее");
+  } else if (page.type === "role") {
+    let html = `<div class="situation"><b>Идея</b>${esc(state.description)}</div>
+      <div class="progress">Роль ${page.roleNum} из ${page.roleTotal}</div>
+      <div class="title" style="margin-bottom:18px">${esc(page.title)}</div>`;
+    page.questions.forEach((q, i) => {
+      html += `<div class="role-q">
+        <div class="role-q-text">${esc(q)}</div>
+        <textarea id="input-${i}" placeholder="Ваш ответ..."></textarea>
+      </div>`;
+    });
+    html += `<div class="err" id="err"></div>`;
+    app.innerHTML = html;
+    setupMainButton("Далее");
   } else if (page.type === "summary") {
     let html = `<div class="progress">${esc(state.categoryTitle)} · итог</div>
       <div class="title" style="margin-bottom:20px">Проверьте ответы</div>
@@ -242,9 +337,14 @@ function renderCurrentPage() {
         <div class="sum-label">Ситуация</div>
         <div class="sum-text">${esc(state.description)}</div>
       </div>`;
+    let lastRole = null;
     state.answers.forEach(a => {
+      if (a.role && a.role !== lastRole) {
+        html += `<div class="sum-role">${esc(a.role)}</div>`;
+        lastRole = a.role;
+      }
       html += `<div class="sum-block">
-        <div class="sum-q">${a.num}. ${esc(a.question)}</div>
+        <div class="sum-q">${a.role ? "" : a.num + ". "}${esc(a.question)}</div>
         <div class="sum-text">${esc(a.answer)}</div>
       </div>`;
     });
@@ -270,6 +370,16 @@ function handleNext() {
     const v = (document.getElementById("input").value || "").trim();
     if (v.length < 1) return showError("Напишите ответ, чтобы продолжить");
     state.answers.push({ num: page.qnum, question: page.text, answer: v });
+  } else if (page.type === "role") {
+    const collected = [];
+    for (let i = 0; i < page.questions.length; i++) {
+      const v = (document.getElementById("input-" + i).value || "").trim();
+      if (v.length < 1) return showError("Пожалуйста, ответьте на все вопросы роли");
+      collected.push(v);
+    }
+    collected.forEach((v, i) => {
+      state.answers.push({ num: state.answers.length + 1, question: page.questions[i], answer: v, role: page.title });
+    });
   } else if (page.type === "summary") {
     submit();
     return;

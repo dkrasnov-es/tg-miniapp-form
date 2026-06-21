@@ -55,10 +55,15 @@ def init_db():
             response_id  INTEGER NOT NULL,
             q_num        INTEGER,
             question     TEXT,
-            answer       TEXT
+            answer       TEXT,
+            role         TEXT
         );
         """
     )
+    # миграция: добавить колонку role в существующую БД, если её нет
+    cols = [r[1] for r in con.execute("PRAGMA table_info(answers)")]
+    if "role" not in cols:
+        con.execute("ALTER TABLE answers ADD COLUMN role TEXT")
     con.commit()
     con.close()
 
@@ -85,8 +90,8 @@ def save_response(message, data):
     answers = data.get("answers", [])
     for a in answers:
         con.execute(
-            "INSERT INTO answers (response_id, q_num, question, answer) VALUES (?, ?, ?, ?)",
-            (response_id, a.get("num"), a.get("question"), a.get("answer")),
+            "INSERT INTO answers (response_id, q_num, question, answer, role) VALUES (?, ?, ?, ?, ?)",
+            (response_id, a.get("num"), a.get("question"), a.get("answer"), a.get("role")),
         )
     con.commit()
     con.close()
