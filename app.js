@@ -63,6 +63,11 @@ const STYLE = `
   .sum-q { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
   .sum-text { background: var(--secondary-bg); border-radius: 12px;
     padding: 12px 14px; white-space: pre-wrap; line-height: 1.5; }
+  .situation { background: var(--secondary-bg); border-radius: 12px;
+    padding: 10px 14px; margin-bottom: 18px; font-size: 14px;
+    color: var(--hint); line-height: 1.45; white-space: pre-wrap; }
+  .situation b { display: block; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
 `;
 const styleEl = document.createElement("style");
 styleEl.textContent = STYLE;
@@ -207,7 +212,7 @@ function chooseCategory(key) {
 function renderCurrentPage() {
   const page = pages[idx];
   const total = CATEGORIES[state.category].items.length;
-  app.classList.toggle("top", page.type === "summary");
+  app.classList.toggle("top", page.type === "summary" || page.type === "question");
 
   if (page.type === "describe") {
     app.innerHTML = `
@@ -224,6 +229,7 @@ function renderCurrentPage() {
     setupMainButton("Далее");
   } else if (page.type === "question") {
     app.innerHTML = `
+      <div class="situation"><b>Ваша ситуация</b>${esc(state.description)}</div>
       <div class="progress">Вопрос ${page.qnum} из ${total}</div>
       <div class="question">${page.text}</div>
       <textarea id="input" placeholder="Ваш ответ..."></textarea>
