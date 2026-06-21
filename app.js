@@ -227,9 +227,25 @@ const CATEGORIES = {
 };
 
 // ── Состояние ────────────────────────────────────────────────────────────────
-let state = { category: null, categoryTitle: null, description: null, answers: [] };
+let state = { category: null, categoryTitle: null };
+let answers = {};   // pageIndex -> string | string[]  (черновик, временные значения)
 let pages = [];
 let idx = -1;
+
+// ── Черновик (временное хранилище, отдельно от сохранённого в БД) ──────────
+const STORAGE_KEY = "psy_draft_v1";
+function saveDraft() {
+  if (!state.category) return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ category: state.category, idx, answers }));
+  } catch (e) {}
+}
+function loadDraft() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "null"); } catch (e) { return null; }
+}
+function clearDraft() {
+  try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+}
 
 const app = document.getElementById("app");
 const mb = tg.MainButton;
@@ -268,6 +284,7 @@ function transitionTo(renderFn) {
 
 function renderCategory() {
   mb.hide();
+  tg.BackButton.hide();
   let html = `<div class="title">С какой проблемой поработаем?</div>
     <div class="subtitle">Выберите тему — дальше пройдём её по шагам.</div>`;
   for (const key in CATEGORIES) {
@@ -285,7 +302,9 @@ function chooseCategory(key) {
   state.category = key;
   state.categoryTitle = CATEGORIES[key].title;
   pages = buildPages(key);
+  answers = {};
   idx = 0;
+  saveDraft();
   tg.HapticFeedback.impactOccurred("light");
   transitionTo(renderCurrentPage);
 }
@@ -294,7 +313,9 @@ function renderCurrentPage() {
   const page = pages[idx];
   const cat = CATEGORIES[state.category];
   const total = (cat.items || []).length;
+  const description = answers[0] || "";
   app.classList.toggle("top", page.type === "summary" || page.type === "question" || page.type === "role");
+  tg.BackButton.show();
 
   if (page.type === "describe") {
     app.innerHTML = `
@@ -303,6 +324,7 @@ function renderCurrentPage() {
       <p class="comment" style="margin-bottom:20px">${cat.describePrompt}</p>
       <textarea id="input" placeholder="Опишите своими словами..."></textarea>
       <div class="err" id="err"></div>`;
+    bindInputs(["input"]);
     setupMainButton("Далее");
   } else if (page.type === "comment") {
     app.innerHTML = `
@@ -311,14 +333,15 @@ function renderCurrentPage() {
     setupMainButton("Далее");
   } else if (page.type === "question") {
     app.innerHTML = `
-      <div class="situation"><b>Ваша ситуация</b>${esc(state.description)}</div>
+      <div class="situation"><b>Ваша ситуация</b>${esc(description)}</div>
       <div class="progress">Вопрос ${page.qnum} из ${total}</div>
       <div class="question">${page.text}</div>
       <textarea id="input" placeholder="Ваш ответ..."></textarea>
       <div class="err" id="err"></div>`;
+    bindInputs(["input"]);
     setupMainButton("Далее");
   } else if (page.type === "role") {
-    let html = `<div class="situation"><b>Идея</b>${esc(state.description)}</div>
+    let html = `<div class="situation"><b>Идея</b>${esc(description)}</div>
       <div class="progress">Роль ${page.roleNum} из ${page.roleTotal}</div>
       <div class="title" style="margin-bottom:18px">${esc(page.title)}</div>`;
     page.questions.forEach((q, i) => {
@@ -329,24 +352,32 @@ function renderCurrentPage() {
     });
     html += `<div class="err" id="err"></div>`;
     app.innerHTML = html;
+    bindInputs(page.questions.map((q, i) => "input-" + i));
     setupMainButton("Далее");
   } else if (page.type === "summary") {
+    const descLabel = cat.mode === "roles" ? "Идея" : "Ситуация";
     let html = `<div class="progress">${esc(state.categoryTitle)} · итог</div>
       <div class="title" style="margin-bottom:20px">Проверьте ответы</div>
       <div class="sum-block">
-        <div class="sum-label">Ситуация</div>
-        <div class="sum-text">${esc(state.description)}</div>
+        <div class="sum-label">${descLabel}</div>
+        <div class="sum-text">${esc(description)}</div>
       </div>`;
-    let lastRole = null;
-    state.answers.forEach(a => {
-      if (a.role && a.role !== lastRole) {
-        html += `<div class="sum-role">${esc(a.role)}</div>`;
-        lastRole = a.role;
+    pages.forEach((p, pi) => {
+      if (p.type === "question") {
+        html += `<div class="sum-block">
+          <div class="sum-q">${p.qnum}. ${esc(p.text)}</div>
+          <div class="sum-text">${esc(answers[pi] || "")}</div>
+        </div>`;
+      } else if (p.type === "role") {
+        html += `<div class="sum-role">${esc(p.title)}</div>`;
+        const arr = answers[pi] || [];
+        p.questions.forEach((q, qi) => {
+          html += `<div class="sum-block">
+            <div class="sum-q">${esc(q)}</div>
+            <div class="sum-text">${esc(arr[qi] || "")}</div>
+          </div>`;
+        });
       }
-      html += `<div class="sum-block">
-        <div class="sum-q">${a.role ? "" : a.num + ". "}${esc(a.question)}</div>
-        <div class="sum-text">${esc(a.answer)}</div>
-      </div>`;
     });
     app.innerHTML = html;
     setupMainButton("Сохранить");
@@ -363,30 +394,48 @@ function handleNext() {
   const page = pages[idx];
 
   if (page.type === "describe") {
-    const v = (document.getElementById("input").value || "").trim();
+    const v = val("input");
     if (v.length < 3) return showError("Опишите ситуацию хотя бы парой слов");
-    state.description = v;
+    answers[idx] = v;
   } else if (page.type === "question") {
-    const v = (document.getElementById("input").value || "").trim();
+    const v = val("input");
     if (v.length < 1) return showError("Напишите ответ, чтобы продолжить");
-    state.answers.push({ num: page.qnum, question: page.text, answer: v });
+    answers[idx] = v;
   } else if (page.type === "role") {
-    const collected = [];
+    const arr = [];
     for (let i = 0; i < page.questions.length; i++) {
-      const v = (document.getElementById("input-" + i).value || "").trim();
+      const v = val("input-" + i);
       if (v.length < 1) return showError("Пожалуйста, ответьте на все вопросы роли");
-      collected.push(v);
+      arr.push(v);
     }
-    collected.forEach((v, i) => {
-      state.answers.push({ num: state.answers.length + 1, question: page.questions[i], answer: v, role: page.title });
-    });
+    answers[idx] = arr;
   } else if (page.type === "summary") {
     submit();
     return;
   }
 
+  saveDraft();
   tg.HapticFeedback.impactOccurred("light");
   idx += 1;
+  transitionTo(renderCurrentPage);
+}
+
+function handleBack() {
+  // удаляем временные значения шага, с которого уходим
+  delete answers[idx];
+  if (idx <= 0) {
+    // назад к выбору категории — черновик сбрасываем целиком
+    idx = -1;
+    state.category = null;
+    state.categoryTitle = null;
+    pages = [];
+    answers = {};
+    clearDraft();
+    transitionTo(renderCategory);
+    return;
+  }
+  saveDraft();
+  idx -= 1;
   transitionTo(renderCurrentPage);
 }
 
@@ -396,15 +445,74 @@ function showError(msg) {
   tg.HapticFeedback.notificationOccurred("error");
 }
 
+function val(id) {
+  const el = document.getElementById(id);
+  return el ? (el.value || "").trim() : "";
+}
+
+// Восстанавливает значения текущей страницы из черновика и сохраняет ввод на лету
+function bindInputs(ids) {
+  const stored = answers[idx];
+  ids.forEach((id, i) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (ids.length > 1) {
+      if (Array.isArray(stored) && stored[i] != null) el.value = stored[i];
+    } else if (typeof stored === "string") {
+      el.value = stored;
+    }
+    el.oninput = () => {
+      if (ids.length > 1) {
+        const cur = Array.isArray(answers[idx]) ? answers[idx] : [];
+        cur[i] = el.value;
+        answers[idx] = cur;
+      } else {
+        answers[idx] = el.value;
+      }
+      saveDraft();
+    };
+  });
+}
+
 function submit() {
+  const description = (answers[0] || "").trim();
+  const out = [];
+  let num = 0;
+  pages.forEach((p, pi) => {
+    if (p.type === "question") {
+      num++;
+      out.push({ num, question: p.text, answer: (answers[pi] || "").trim(), role: null });
+    } else if (p.type === "role") {
+      const arr = answers[pi] || [];
+      p.questions.forEach((q, qi) => {
+        num++;
+        out.push({ num, question: q, answer: (arr[qi] || "").trim(), role: p.title });
+      });
+    }
+  });
+  clearDraft();   // черновик больше не нужен — данные уходят на постоянное сохранение
   tg.HapticFeedback.notificationOccurred("success");
   tg.sendData(JSON.stringify({
     category: state.category,
     categoryTitle: state.categoryTitle,
-    description: state.description,
-    answers: state.answers
+    description,
+    answers: out
   }));
 }
 
 // ── Старт ─────────────────────────────────────────────────────────────────
-renderCategory();
+function init() {
+  tg.BackButton.onClick(handleBack);
+  const draft = loadDraft();
+  if (draft && draft.category && CATEGORIES[draft.category]) {
+    state.category = draft.category;
+    state.categoryTitle = CATEGORIES[draft.category].title;
+    pages = buildPages(draft.category);
+    answers = draft.answers || {};
+    idx = (typeof draft.idx === "number" && draft.idx >= 0 && draft.idx < pages.length) ? draft.idx : 0;
+    renderCurrentPage();
+  } else {
+    renderCategory();
+  }
+}
+init();
