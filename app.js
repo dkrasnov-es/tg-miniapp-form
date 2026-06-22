@@ -54,6 +54,7 @@ const STYLE = `
   .cat-btn[disabled] { opacity: .45; font-weight: 500; }
   .cat-btn .cat-sub { display: block; font-size: 13px; font-weight: 400;
     color: var(--hint); margin-top: 4px; }
+  .history-open { margin-top: 18px; }
   .err { color: #e53935; font-size: 14px; margin-top: 10px; min-height: 18px; }
   .hint-line { color: var(--hint); font-size: 13px; margin-top: 8px; }
   #app.top { justify-content: flex-start; }
@@ -303,6 +304,7 @@ let state = { category: null, categoryTitle: null };
 let answers = {};   // pageIndex -> string | string[]  (черновик, временные значения)
 let pages = [];
 let idx = -1;
+let mode = "menu";  // menu | wizard | history | historyItem
 
 // ── Черновик (временное хранилище, отдельно от сохранённого в БД) ──────────
 const STORAGE_KEY = "psy_draft_v1";
@@ -317,6 +319,117 @@ function loadDraft() {
 }
 function clearDraft() {
   try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+}
+
+// ── История сохранённых ответов (Telegram CloudStorage, своя у каждого юзера) ──
+const CS = tg.CloudStorage;
+function csGet(key) {
+  return new Promise(res => { if (!CS) return res(null); CS.getItem(key, (e, v) => res(e ? null : v)); });
+}
+function csSet(key, val) {
+  return new Promise(res => { if (!CS) return res(false); CS.setItem(key, val, (e, ok) => res(!e && ok)); });
+}
+
+function fmtDate(t) {
+  const d = new Date(Number(t));
+  const p = n => String(n).padStart(2, "0");
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+async function saveToHistory() {
+  if (!CS) return;
+  const t = String(Date.now());
+  const ok = await csSet("s" + t, JSON.stringify({ c: state.category, ans: answers, t }));
+  if (!ok) return;  // не влезло/недоступно — в БД всё равно сохранено
+  let list = [];
+  try { list = JSON.parse((await csGet("hidx")) || "[]") || []; } catch (e) { list = []; }
+  list.unshift({ t, c: state.category });
+  list = list.slice(0, 50);
+  await csSet("hidx", JSON.stringify(list));
+}
+
+async function openHistory() {
+  mode = "history";
+  mb.hide();
+  tg.BackButton.show();
+  app.classList.remove("top");
+  app.innerHTML = `<div class="title">Мои ответы</div><div class="subtitle">Загрузка…</div>`;
+  if (!CS) {
+    app.innerHTML = `<div class="title">Мои ответы</div>
+      <div class="subtitle">История недоступна в этой версии Telegram.</div>`;
+    return;
+  }
+  let list = [];
+  try { list = JSON.parse((await csGet("hidx")) || "[]") || []; } catch (e) { list = []; }
+  if (!list.length) {
+    app.innerHTML = `<div class="title">Мои ответы</div>
+      <div class="subtitle">Здесь появятся ваши сохранённые ответы после прохождения формы.</div>`;
+    return;
+  }
+  let html = `<div class="title">Мои ответы</div>
+    <div class="subtitle">Выберите запись, чтобы посмотреть.</div>`;
+  list.forEach(it => {
+    const cat = CATEGORIES[it.c];
+    const title = cat ? cat.title : it.c;
+    html += `<button class="cat-btn" data-t="${it.t}">${esc(title)}
+      <span class="cat-sub">${fmtDate(it.t)}</span></button>`;
+  });
+  app.innerHTML = html;
+  app.querySelectorAll(".cat-btn[data-t]").forEach(b => {
+    b.onclick = () => openHistoryItem(b.dataset.t);
+  });
+}
+
+async function openHistoryItem(t) {
+  mode = "historyItem";
+  mb.hide();
+  tg.BackButton.show();
+  const raw = await csGet("s" + t);
+  if (!raw) {
+    app.classList.remove("top");
+    app.innerHTML = `<div class="subtitle">Запись не найдена.</div>`;
+    return;
+  }
+  let session;
+  try { session = JSON.parse(raw); } catch (e) {
+    app.innerHTML = `<div class="subtitle">Не удалось прочитать запись.</div>`;
+    return;
+  }
+  transitionTo(() => renderHistoryItem(session));
+}
+
+function renderHistoryItem(session) {
+  app.classList.add("top");
+  const cat = CATEGORIES[session.c];
+  if (!cat) { app.innerHTML = `<div class="subtitle">Категория недоступна.</div>`; return; }
+  const localPages = buildPages(session.c);
+  const ans = session.ans || {};
+  const description = ans[0] || "";
+  const descLabel = cat.mode === "roles" ? "Идея" : "Ситуация";
+  let html = `<div class="progress">${esc(cat.title)}</div>
+    <div class="title" style="margin-bottom:20px">Сохранённые ответы</div>
+    <div class="sum-block">
+      <div class="sum-label">${descLabel}</div>
+      <div class="sum-text">${esc(description)}</div>
+    </div>`;
+  localPages.forEach((p, pi) => {
+    if (p.type === "question") {
+      html += `<div class="sum-block">
+        <div class="sum-q">${p.qnum}. ${esc(p.text)}</div>
+        <div class="sum-text">${esc(ans[pi] || "")}</div>
+      </div>`;
+    } else if (p.type === "role") {
+      html += `<div class="sum-role">${esc(p.title)}</div>`;
+      const arr = ans[pi] || [];
+      p.questions.forEach((q, qi) => {
+        html += `<div class="sum-block">
+          <div class="sum-q">${esc(q)}</div>
+          <div class="sum-text">${esc(arr[qi] || "")}</div>
+        </div>`;
+      });
+    }
+  });
+  app.innerHTML = html;
 }
 
 const app = document.getElementById("app");
@@ -355,8 +468,10 @@ function transitionTo(renderFn) {
 }
 
 function renderCategory() {
+  mode = "menu";
   mb.hide();
   tg.BackButton.hide();
+  app.classList.remove("top");
   let html = `<div class="title">С какой проблемой поработаем?</div>
     <div class="subtitle">Выберите тему — дальше пройдём её по шагам.</div>`;
   for (const key in CATEGORIES) {
@@ -364,15 +479,19 @@ function renderCategory() {
   }
   html += `<button class="cat-btn" disabled>Другие темы
     <span class="cat-sub">скоро</span></button>`;
+  html += `<button class="cat-btn history-open" data-history="1">📚 Мои сохранённые ответы</button>`;
   app.innerHTML = html;
   app.querySelectorAll(".cat-btn[data-cat]").forEach(b => {
     b.onclick = () => chooseCategory(b.dataset.cat);
   });
+  const hb = app.querySelector("[data-history]");
+  if (hb) hb.onclick = () => openHistory();
 }
 
 function chooseCategory(key) {
   state.category = key;
   state.categoryTitle = CATEGORIES[key].title;
+  mode = "wizard";
   pages = buildPages(key);
   answers = {};
   idx = 0;
@@ -493,7 +612,9 @@ function handleNext() {
 }
 
 function handleBack() {
-  // удаляем временные значения шага, с которого уходим
+  if (mode === "history") { transitionTo(renderCategory); return; }
+  if (mode === "historyItem") { openHistory(); return; }
+  // wizard: удаляем временные значения шага, с которого уходим
   delete answers[idx];
   if (idx <= 0) {
     // назад к выбору категории — черновик сбрасываем целиком
@@ -546,7 +667,7 @@ function bindInputs(ids) {
   });
 }
 
-function submit() {
+async function submit() {
   const description = (answers[0] || "").trim();
   const out = [];
   let num = 0;
@@ -562,7 +683,8 @@ function submit() {
       });
     }
   });
-  clearDraft();   // черновик больше не нужен — данные уходят на постоянное сохранение
+  await saveToHistory();   // копия в CloudStorage — для просмотра внутри приложения
+  clearDraft();            // черновик больше не нужен — данные уходят на постоянное сохранение
   tg.HapticFeedback.notificationOccurred("success");
   tg.sendData(JSON.stringify({
     category: state.category,
@@ -579,6 +701,7 @@ function init() {
   if (draft && draft.category && CATEGORIES[draft.category]) {
     state.category = draft.category;
     state.categoryTitle = CATEGORIES[draft.category].title;
+    mode = "wizard";
     pages = buildPages(draft.category);
     answers = draft.answers || {};
     idx = (typeof draft.idx === "number" && draft.idx >= 0 && draft.idx < pages.length) ? draft.idx : 0;
