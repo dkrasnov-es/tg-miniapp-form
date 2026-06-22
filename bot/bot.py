@@ -1,4 +1,5 @@
 import asyncio
+import html
 import json
 import logging
 import os
@@ -6,8 +7,12 @@ import sqlite3
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import (
+    BotCommand,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
@@ -98,16 +103,112 @@ def save_response(message, data):
     return response_id, len(answers)
 
 
+def _esc(s):
+    return html.escape(s or "")
+
+
+def get_user_sessions(user_id):
+    con = sqlite3.connect(DB_PATH)
+    con.row_factory = sqlite3.Row
+    rows = con.execute(
+        "SELECT id, created_at, category_title, description FROM responses "
+        "WHERE tg_user_id = ? ORDER BY id DESC",
+        (user_id,),
+    ).fetchall()
+    con.close()
+    return rows
+
+
+def get_session(response_id, user_id):
+    # Жёсткая фильтрация по tg_user_id — чужую сессию открыть нельзя
+    con = sqlite3.connect(DB_PATH)
+    con.row_factory = sqlite3.Row
+    resp = con.execute(
+        "SELECT * FROM responses WHERE id = ? AND tg_user_id = ?",
+        (response_id, user_id),
+    ).fetchone()
+    answers = []
+    if resp:
+        answers = con.execute(
+            "SELECT q_num, question, answer, role FROM answers "
+            "WHERE response_id = ? ORDER BY id",
+            (response_id,),
+        ).fetchall()
+    con.close()
+    return resp, answers
+
+
+def format_session(resp, answers):
+    when = resp["created_at"][:16].replace("T", " ")
+    parts = [
+        f"🧩 <b>{_esc(resp['category_title'])}</b> · {when}",
+        f"📌 {_esc(resp['description'])}",
+        "",
+    ]
+    last_role = None
+    for a in answers:
+        if a["role"] and a["role"] != last_role:
+            parts.append(f"\n<b>{_esc(a['role'])}</b>")
+            last_role = a["role"]
+        parts.append(f"• {_esc(a['question'])}\n  → {_esc(a['answer'])}")
+    return "\n".join(parts)
+
+
+async def send_long(message, text):
+    # Telegram лимит ~4096 символов — режем по строкам
+    limit = 3900
+    chunk = ""
+    for line in text.split("\n"):
+        if len(chunk) + len(line) + 1 > limit:
+            if chunk.strip():
+                await message.answer(chunk, parse_mode="HTML")
+            chunk = ""
+        chunk += line + "\n"
+    if chunk.strip():
+        await message.answer(chunk, parse_mode="HTML")
+
+
+async def show_my_sessions(message: Message):
+    rows = get_user_sessions(message.from_user.id)
+    if not rows:
+        await message.answer(
+            "У вас пока нет сохранённых ответов. Нажмите «🧭 Начать» и пройдите форму 🙂"
+        )
+        return
+    lines = ["📚 <b>Ваши сохранённые ответы</b>", ""]
+    keyboard = []
+    for r in rows[:20]:
+        date = r["created_at"][:10]
+        lines.append(f"#{r['id']} · {date} · {_esc(r['category_title'])}")
+        keyboard.append(
+            [InlineKeyboardButton(
+                text=f"#{r['id']} · {r['category_title']}",
+                callback_data=f"view:{r['id']}",
+            )]
+        )
+    if len(rows) > 20:
+        lines.append(f"\n…и ещё {len(rows) - 20}. Показаны последние 20.")
+    await message.answer(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+    )
+
+
 @dp.message(CommandStart())
 async def start(message: Message):
     # Mini App с sendData открывается ТОЛЬКО кнопкой reply-клавиатуры
     kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="🧭 Начать", web_app=WebAppInfo(url=FORM_URL))]],
+        keyboard=[
+            [KeyboardButton(text="🧭 Начать", web_app=WebAppInfo(url=FORM_URL))],
+            [KeyboardButton(text="📚 Мои ответы")],
+        ],
         resize_keyboard=True,
     )
     await message.answer(
         "Привет! Это помощник для разбора проблем по шагам.\n"
-        "Нажми кнопку ниже, выбери тему и пройди вопросы 👇",
+        "Нажми «🧭 Начать», выбери тему и пройди вопросы.\n"
+        "«📚 Мои ответы» — посмотреть свои сохранённые сессии. 👇",
         reply_markup=kb,
     )
 
@@ -126,14 +227,44 @@ async def on_form(message: Message):
         "✅ Спасибо! Твои ответы сохранены.\n\n"
         f"🧩 Тема: <b>{data.get('categoryTitle', '—')}</b>\n"
         f"📝 Ответов записано: <b>{n}</b>\n"
-        f"🔖 Номер сессии: <b>#{response_id}</b>",
+        f"🔖 Номер сессии: <b>#{response_id}</b>\n\n"
+        "Посмотреть все свои ответы — команда /my или кнопка «📚 Мои ответы».",
         parse_mode="HTML",
     )
+
+
+@dp.message(Command("my"))
+async def cmd_my(message: Message):
+    await show_my_sessions(message)
+
+
+@dp.message(F.text == "📚 Мои ответы")
+async def btn_my(message: Message):
+    await show_my_sessions(message)
+
+
+@dp.callback_query(F.data.startswith("view:"))
+async def cb_view(cb: CallbackQuery):
+    try:
+        rid = int(cb.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await cb.answer("Некорректный запрос", show_alert=True)
+        return
+    resp, answers = get_session(rid, cb.from_user.id)
+    if not resp:
+        await cb.answer("Сессия не найдена", show_alert=True)
+        return
+    await send_long(cb.message, format_session(resp, answers))
+    await cb.answer()
 
 
 async def main():
     init_db()
     bot = Bot(TOKEN)
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Начать"),
+        BotCommand(command="my", description="Мои сохранённые ответы"),
+    ])
     me = await bot.get_me()
     logging.info("Бот запущен: @%s | FORM_URL=%s", me.username, FORM_URL)
     await dp.start_polling(bot)
