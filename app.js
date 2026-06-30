@@ -552,10 +552,12 @@ function fmtDate(t) {
   return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-async function saveToHistory() {
+async function saveToHistory(description, items) {
   if (!CS) return;
   const t = String(Date.now());
-  const ok = await csSet("s" + t, JSON.stringify({ c: state.category, ans: answers, t }));
+  // Храним ГОТОВЫЕ пары вопрос-ответ — показ не зависит от текущей структуры категории
+  const payload = { c: state.category, ct: state.categoryTitle, t, d: description, items };
+  const ok = await csSet("s" + t, JSON.stringify(payload));
   if (!ok) return;  // не влезло/недоступно — в БД всё равно сохранено
   let list = [];
   try { list = JSON.parse((await csGet("hidx")) || "[]") || []; } catch (e) { list = []; }
@@ -617,6 +619,36 @@ async function openHistoryItem(t) {
 function renderHistoryItem(session) {
   app.classList.add("top");
   const cat = CATEGORIES[session.c];
+  const title = session.ct || (cat && cat.title) || session.c;
+
+  // Новый формат: готовые пары вопрос-ответ — не зависят от текущей структуры категории
+  if (Array.isArray(session.items)) {
+    const description = session.d || "";
+    let html = `<div class="progress">${esc(title)}</div>
+      <div class="title" style="margin-bottom:20px">Сохранённые ответы</div>`;
+    if (description) {
+      const descLabel = cat && cat.mode === "roles" ? "Идея" : "Ситуация";
+      html += `<div class="sum-block">
+        <div class="sum-label">${descLabel}</div>
+        <div class="sum-text">${esc(description)}</div>
+      </div>`;
+    }
+    let lastRole = null;
+    session.items.forEach(it => {
+      if (it.role && it.role !== lastRole) {
+        html += `<div class="sum-role">${esc(it.role)}</div>`;
+        lastRole = it.role;
+      }
+      html += `<div class="sum-block">
+        <div class="sum-q">${esc(it.question)}</div>
+        <div class="sum-text">${esc(it.answer)}</div>
+      </div>`;
+    });
+    app.innerHTML = html;
+    return;
+  }
+
+  // Легаси-формат старых записей (только ответы по индексу) — best-effort
   if (!cat) { app.innerHTML = `<div class="subtitle">Категория недоступна.</div>`; return; }
   const localPages = buildPages(session.c);
   const ans = session.ans || {};
@@ -962,7 +994,7 @@ async function submit() {
       });
     }
   });
-  await saveToHistory();   // копия в CloudStorage — для просмотра внутри приложения
+  await saveToHistory(description, out);   // копия в CloudStorage — для просмотра внутри приложения
   clearDraft();            // черновик больше не нужен — данные уходят на постоянное сохранение
   tg.HapticFeedback.notificationOccurred("success");
   tg.sendData(JSON.stringify({
