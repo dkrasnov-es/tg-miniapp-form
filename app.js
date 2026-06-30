@@ -650,7 +650,16 @@ function renderHistoryItem(session) {
 
   // Легаси-формат старых записей (только ответы по индексу) — best-effort
   if (!cat) { app.innerHTML = `<div class="subtitle">Категория недоступна.</div>`; return; }
-  const localPages = buildPages(session.c);
+  // Старые записи "Неудачи" сделаны до добавления шага про другие интерпретации —
+  // реконструируем по структуре ДО него, чтобы ответы совпали с вопросами.
+  let catDef = cat;
+  if (session.c === "failure") {
+    catDef = Object.assign({}, cat, {
+      items: cat.items.filter(it =>
+        it.question !== "Какие ещё объяснения произошедшего возможны, кроме самого негативного?")
+    });
+  }
+  const localPages = buildPagesFromCat(catDef);
   const ans = session.ans || {};
   const description = ans[0] || "";
   let html = `<div class="progress">${esc(cat.title)}</div>
@@ -701,7 +710,10 @@ const mb = tg.MainButton;
 mb.onClick(handleNext);
 
 function buildPages(catKey) {
-  const cat = CATEGORIES[catKey];
+  return buildPagesFromCat(CATEGORIES[catKey]);
+}
+
+function buildPagesFromCat(cat) {
   const p = [{ type: "describe" }];
   if (cat.mode === "roles") {
     cat.roles.forEach((r, i) => {
