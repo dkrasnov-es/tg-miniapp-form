@@ -566,6 +566,58 @@ async function saveToHistory(description, items) {
   await csSet("hidx", JSON.stringify(list));
 }
 
+// Преобразует карту ответов (легаси-формат) в готовые пары вопрос-ответ
+function resolveItems(localPages, ans) {
+  const out = [];
+  localPages.forEach((p, pi) => {
+    if (p.type === "question") {
+      out.push({ question: p.text, answer: (ans[pi] || "").trim(), role: null });
+    } else if (p.type === "role") {
+      const arr = ans[pi] || [];
+      p.questions.forEach((q, qi) => out.push({ question: q, answer: (arr[qi] || "").trim(), role: p.title }));
+    } else if (p.type === "step") {
+      const arr = ans[pi] || [];
+      p.questions.forEach((q, qi) => {
+        const a = (arr[qi] || "").trim();
+        if (a) out.push({ question: q, answer: a, role: p.title });
+      });
+    }
+  });
+  return out;
+}
+
+// Разовая миграция: старые записи (ans по индексу) → новый формат (готовые пары).
+// Выполняется на устройстве пользователя при открытии формы.
+async function migrateHistory() {
+  if (!CS) return;
+  try { if ((await csGet("hmig")) === "2") return; } catch (e) { return; }
+  let list = [];
+  try { list = JSON.parse((await csGet("hidx")) || "[]") || []; } catch (e) { return; }
+  for (const it of list) {
+    let raw;
+    try { raw = await csGet("s" + it.t); } catch (e) { continue; }
+    if (!raw) continue;
+    let sess;
+    try { sess = JSON.parse(raw); } catch (e) { continue; }
+    if (Array.isArray(sess.items)) continue;     // уже новый формат
+    const cat = CATEGORIES[sess.c];
+    if (!cat) continue;                           // категория недоступна — оставляем как есть
+    let catDef = cat;
+    if (sess.c === "failure") {
+      // старые записи "Неудачи" сделаны до шага про другие интерпретации
+      catDef = Object.assign({}, cat, {
+        items: cat.items.filter(q =>
+          q.question !== "Какие ещё объяснения произошедшего возможны, кроме самого негативного?")
+      });
+    }
+    const ans = sess.ans || {};
+    const items = resolveItems(buildPagesFromCat(catDef), ans);
+    const payload = { c: sess.c, ct: cat.title, t: sess.t, d: ans[0] || "", items };
+    try { await csSet("s" + sess.t, JSON.stringify(payload)); } catch (e) {}
+  }
+  try { await csSet("hmig", "2"); } catch (e) {}
+}
+
 async function openHistory() {
   mode = "history";
   mb.hide();
@@ -1020,6 +1072,7 @@ async function submit() {
 // ── Старт ─────────────────────────────────────────────────────────────────
 function init() {
   tg.BackButton.onClick(handleBack);
+  migrateHistory();   // разовая нормализация старых записей истории (async, не блокирует)
   const draft = loadDraft();
   if (draft && draft.category && CATEGORIES[draft.category]) {
     state.category = draft.category;
