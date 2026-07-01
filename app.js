@@ -626,6 +626,67 @@ async function migrateHistory() {
   try { await csSet("hmig", "3"); } catch (e) {}
 }
 
+function csRemove(key) {
+  return new Promise(res => { if (!CS) return res(false); CS.removeItem(key, (e, ok) => res(!e && ok)); });
+}
+
+function b64urlDecode(s) {
+  s = String(s).replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4) s += "=";
+  const bin = atob(s);
+  const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+// Восстановление/синхронизация истории из ссылки (данные шлёт бот в URL) → CloudStorage
+async function handleRestore() {
+  if (!CS) return false;
+  const params = new URLSearchParams(window.location.search);
+  const restore = params.get("restore");
+  if (!restore) return false;
+  let sessions;
+  try { sessions = JSON.parse(b64urlDecode(restore)); } catch (e) { return false; }
+  if (!Array.isArray(sessions)) return false;
+
+  const sid = params.get("sid") || "";
+  const part = params.get("part") || "1";
+  const total = params.get("total") || "1";
+
+  // Новый батч → очистить текущую историю и залить из БД заново (БД — источник истины)
+  let lastSid = null;
+  try { lastSid = await csGet("syncSid"); } catch (e) {}
+  if (sid && sid !== lastSid) {
+    let old = [];
+    try { old = JSON.parse((await csGet("hidx")) || "[]") || []; } catch (e) { old = []; }
+    for (const it of old) { await csRemove("s" + it.t); }
+    await csSet("hidx", "[]");
+    await csSet("syncSid", sid);
+    await csSet("hmig", "3");   // не запускать миграцию поверх синхронизированных
+  }
+
+  let list = [];
+  try { list = JSON.parse((await csGet("hidx")) || "[]") || []; } catch (e) { list = []; }
+  for (const s of sessions) {
+    if (!s || !s.t) continue;
+    await csSet("s" + s.t, JSON.stringify(s));
+    if (!list.some(x => x.t === s.t)) list.push({ t: s.t, c: s.c });
+  }
+  list.sort((a, b) => Number(b.t) - Number(a.t));
+  await csSet("hidx", JSON.stringify(list));
+
+  mb.hide();
+  tg.BackButton.hide();
+  app.classList.remove("top");
+  const done = part === total;
+  app.innerHTML = `<div class="title">Синхронизация</div>
+    <div class="subtitle">Восстановлено в этой части: ${sessions.length}. Часть ${esc(part)} из ${esc(total)}.<br><br>
+    ${done ? "Готово — открой «Мои ответы»." : "Нажми следующую кнопку «Синхронизировать» в чате с ботом."}</div>
+    <button class="cat-btn" id="go-hist">📚 Мои ответы</button>`;
+  const b = document.getElementById("go-hist");
+  if (b) b.onclick = () => openHistory();
+  return true;
+}
+
 async function openHistory() {
   mode = "history";
   mb.hide();
@@ -1069,8 +1130,9 @@ async function submit() {
 }
 
 // ── Старт ─────────────────────────────────────────────────────────────────
-function init() {
+async function init() {
   tg.BackButton.onClick(handleBack);
+  if (await handleRestore()) return;   // режим восстановления истории из ссылки
   migrateHistory();   // разовая нормализация старых записей истории (async, не блокирует)
   const draft = loadDraft();
   if (draft && draft.category && CATEGORIES[draft.category]) {

@@ -1,9 +1,11 @@
 import asyncio
+import base64
 import html
 import json
 import logging
 import os
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
@@ -258,12 +260,105 @@ async def cb_view(cb: CallbackQuery):
     await cb.answer()
 
 
+def _created_ms(created_at, fallback_id):
+    try:
+        return int(datetime.fromisoformat(created_at).timestamp() * 1000)
+    except Exception:
+        return 1_000_000_000_000 + int(fallback_id)
+
+
+def build_sync_sessions(user_id):
+    # Собираем все сессии пользователя в формате Mini App (готовые пары вопрос-ответ)
+    con = sqlite3.connect(DB_PATH)
+    con.row_factory = sqlite3.Row
+    resps = con.execute(
+        "SELECT * FROM responses WHERE tg_user_id = ? ORDER BY id", (user_id,)
+    ).fetchall()
+    out = []
+    for r in resps:
+        arows = con.execute(
+            "SELECT question, answer, role FROM answers WHERE response_id = ? ORDER BY id",
+            (r["id"],),
+        ).fetchall()
+        items = [
+            {"question": a["question"], "answer": a["answer"], "role": a["role"]}
+            for a in arows
+        ]
+        out.append({
+            "c": r["category"],
+            "ct": r["category_title"],
+            "t": str(_created_ms(r["created_at"], r["id"])),
+            "d": r["description"] or "",
+            "items": items,
+        })
+    con.close()
+    return out
+
+
+def _b64(sessions):
+    return base64.urlsafe_b64encode(
+        json.dumps(sessions, ensure_ascii=False).encode()
+    ).decode().rstrip("=")
+
+
+def chunk_sessions(sessions, budget=4800):
+    # Пакуем сессии в части так, чтобы каждая ссылка уместилась в лимит URL
+    chunks, cur = [], []
+    for s in sessions:
+        if cur and len(_b64(cur + [s])) > budget:
+            chunks.append(cur)
+            cur = [s]
+        else:
+            cur.append(s)
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+@dp.message(Command("sync"))
+async def cmd_sync(message: Message):
+    sessions = build_sync_sessions(message.from_user.id)
+    if not sessions:
+        await message.answer("Нет сохранённых записей для синхронизации.")
+        return
+    sid = str(int(message.date.timestamp()))
+    # Пробуем крупные части (меньше кнопок); если Telegram отклонит длинный URL — дробим мельче
+    for budget in (8000, 5000, 3000, 1800):
+        chunks = chunk_sessions(sessions, budget)
+        total = len(chunks)
+        rows = [
+            [InlineKeyboardButton(
+                text=f"🔄 Синхронизировать {k}/{total}",
+                web_app=WebAppInfo(url=f"{FORM_URL}?sid={sid}&part={k}&total={total}&restore={_b64(ch)}"),
+            )]
+            for k, ch in enumerate(chunks, 1)
+        ]
+        try:
+            await message.answer(
+                f"🔄 Синхронизация истории из БД: <b>{len(sessions)}</b> записей, <b>{total}</b> "
+                f"{'часть' if total == 1 else 'частей'}.\n\n"
+                "Нажимай кнопки <b>по порядку</b> (1, 2, …). Первая очистит текущую in-app "
+                "историю и зальёт всё из базы заново. После последней открой «📚 Мои ответы».",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+            )
+            return
+        except Exception as e:
+            logging.warning("sync send failed at budget %s: %s", budget, e)
+            continue
+    await message.answer(
+        "Не удалось сформировать синхронизацию — записи слишком большие для передачи ссылкой. "
+        "Смотри их через /my."
+    )
+
+
 async def main():
     init_db()
     bot = Bot(TOKEN)
     await bot.set_my_commands([
         BotCommand(command="start", description="Начать"),
         BotCommand(command="my", description="Мои сохранённые ответы"),
+        BotCommand(command="sync", description="Синхронизировать историю в приложение"),
     ])
     me = await bot.get_me()
     logging.info("Бот запущен: @%s | FORM_URL=%s", me.username, FORM_URL)
