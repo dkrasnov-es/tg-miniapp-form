@@ -586,11 +586,27 @@ function resolveItems(localPages, ans) {
   return out;
 }
 
+// Для легаси-записей "Неудачи" выбираем структуру по ЧИСЛУ ответов:
+// 7 вопросов = запись до шага про другие интерпретации, 8 = уже с ним.
+function legacyCatDef(catKey, ans) {
+  const cat = CATEGORIES[catKey];
+  if (catKey === "failure") {
+    const qCount = Object.keys(ans || {}).filter(k => Number(k) > 0).length;
+    if (qCount < 8) {
+      return Object.assign({}, cat, {
+        items: cat.items.filter(q =>
+          q.question !== "Какие ещё объяснения произошедшего возможны, кроме самого негативного?")
+      });
+    }
+  }
+  return cat;
+}
+
 // Разовая миграция: старые записи (ans по индексу) → новый формат (готовые пары).
 // Выполняется на устройстве пользователя при открытии формы.
 async function migrateHistory() {
   if (!CS) return;
-  try { if ((await csGet("hmig")) === "2") return; } catch (e) { return; }
+  try { if ((await csGet("hmig")) === "3") return; } catch (e) { return; }
   let list = [];
   try { list = JSON.parse((await csGet("hidx")) || "[]") || []; } catch (e) { return; }
   for (const it of list) {
@@ -599,23 +615,15 @@ async function migrateHistory() {
     if (!raw) continue;
     let sess;
     try { sess = JSON.parse(raw); } catch (e) { continue; }
-    if (Array.isArray(sess.items)) continue;     // уже новый формат
+    if (Array.isArray(sess.items)) continue;     // уже новый формат — не трогаем
     const cat = CATEGORIES[sess.c];
     if (!cat) continue;                           // категория недоступна — оставляем как есть
-    let catDef = cat;
-    if (sess.c === "failure") {
-      // старые записи "Неудачи" сделаны до шага про другие интерпретации
-      catDef = Object.assign({}, cat, {
-        items: cat.items.filter(q =>
-          q.question !== "Какие ещё объяснения произошедшего возможны, кроме самого негативного?")
-      });
-    }
     const ans = sess.ans || {};
-    const items = resolveItems(buildPagesFromCat(catDef), ans);
+    const items = resolveItems(buildPagesFromCat(legacyCatDef(sess.c, ans)), ans);
     const payload = { c: sess.c, ct: cat.title, t: sess.t, d: ans[0] || "", items };
     try { await csSet("s" + sess.t, JSON.stringify(payload)); } catch (e) {}
   }
-  try { await csSet("hmig", "2"); } catch (e) {}
+  try { await csSet("hmig", "3"); } catch (e) {}
 }
 
 async function openHistory() {
@@ -702,17 +710,8 @@ function renderHistoryItem(session) {
 
   // Легаси-формат старых записей (только ответы по индексу) — best-effort
   if (!cat) { app.innerHTML = `<div class="subtitle">Категория недоступна.</div>`; return; }
-  // Старые записи "Неудачи" сделаны до добавления шага про другие интерпретации —
-  // реконструируем по структуре ДО него, чтобы ответы совпали с вопросами.
-  let catDef = cat;
-  if (session.c === "failure") {
-    catDef = Object.assign({}, cat, {
-      items: cat.items.filter(it =>
-        it.question !== "Какие ещё объяснения произошедшего возможны, кроме самого негативного?")
-    });
-  }
-  const localPages = buildPagesFromCat(catDef);
   const ans = session.ans || {};
+  const localPages = buildPagesFromCat(legacyCatDef(session.c, ans));
   const description = ans[0] || "";
   let html = `<div class="progress">${esc(cat.title)}</div>
     <div class="title" style="margin-bottom:20px">Сохранённые ответы</div>`;
