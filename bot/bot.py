@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import gzip
 import html
 import json
 import logging
@@ -296,12 +297,12 @@ def build_sync_sessions(user_id):
 
 
 def _b64(sessions):
-    return base64.urlsafe_b64encode(
-        json.dumps(sessions, ensure_ascii=False).encode()
-    ).decode().rstrip("=")
+    # gzip + base64url — компактно, чтобы уместиться в лимит длины URL кнопки Telegram
+    raw = json.dumps(sessions, ensure_ascii=False).encode()
+    return base64.urlsafe_b64encode(gzip.compress(raw)).decode().rstrip("=")
 
 
-def chunk_sessions(sessions, budget=4800):
+def chunk_sessions(sessions, budget=1500):
     # Пакуем сессии в части так, чтобы каждая ссылка уместилась в лимит URL
     chunks, cur = [], []
     for s in sessions:
@@ -322,14 +323,14 @@ async def cmd_sync(message: Message):
         await message.answer("Нет сохранённых записей для синхронизации.")
         return
     sid = str(int(message.date.timestamp()))
-    # Пробуем крупные части (меньше кнопок); если Telegram отклонит длинный URL — дробим мельче
-    for budget in (8000, 5000, 3000, 1800):
+    # Данные gzip-сжаты; держим URL кнопки коротким (лимит длины у web_app-кнопок жёсткий)
+    for budget in (1500, 1000, 700):
         chunks = chunk_sessions(sessions, budget)
         total = len(chunks)
         rows = [
             [InlineKeyboardButton(
                 text=f"🔄 Синхронизировать {k}/{total}",
-                web_app=WebAppInfo(url=f"{FORM_URL}?sid={sid}&part={k}&total={total}&restore={_b64(ch)}"),
+                web_app=WebAppInfo(url=f"{FORM_URL}?sid={sid}&part={k}&total={total}&gz=1&restore={_b64(ch)}"),
             )]
             for k, ch in enumerate(chunks, 1)
         ]
@@ -350,6 +351,53 @@ async def cmd_sync(message: Message):
         "Не удалось сформировать синхронизацию — записи слишком большие для передачи ссылкой. "
         "Смотри их через /my."
     )
+
+
+@dp.message(Command("restore"))
+async def cmd_restore(message: Message):
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("Укажи номер записи, например: /restore 13")
+        return
+    rid = int(parts[1])
+    con = sqlite3.connect(DB_PATH)
+    con.row_factory = sqlite3.Row
+    r = con.execute(
+        "SELECT * FROM responses WHERE id = ? AND tg_user_id = ?",
+        (rid, message.from_user.id),
+    ).fetchone()
+    if not r:
+        con.close()
+        await message.answer("Запись не найдена.")
+        return
+    arows = con.execute(
+        "SELECT question, answer, role FROM answers WHERE response_id = ? ORDER BY id",
+        (rid,),
+    ).fetchall()
+    con.close()
+    session = {
+        "c": r["category"],
+        "ct": r["category_title"],
+        "t": str(_created_ms(r["created_at"], r["id"])),
+        "d": r["description"] or "",
+        "items": [
+            {"question": a["question"], "answer": a["answer"], "role": a["role"]}
+            for a in arows
+        ],
+    }
+    url = f"{FORM_URL}?merge=1&gz=1&restore={_b64([session])}"
+    try:
+        await message.answer(
+            f"Восстановить запись #{rid} (<b>{html.escape(r['category_title'])}</b>) в приложение — "
+            "нажми кнопку. Остальная история не тронется; добавится/обновится только эта запись.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=f"➕ Восстановить #{rid}", web_app=WebAppInfo(url=url)),
+            ]]),
+        )
+    except Exception as e:
+        logging.warning("restore send failed: %s", e)
+        await message.answer("Не удалось сформировать ссылку восстановления (запись слишком большая).")
 
 
 async def main():

@@ -630,12 +630,21 @@ function csRemove(key) {
   return new Promise(res => { if (!CS) return res(false); CS.removeItem(key, (e, ok) => res(!e && ok)); });
 }
 
-function b64urlDecode(s) {
+function b64urlToBytes(s) {
   s = String(s).replace(/-/g, "+").replace(/_/g, "/");
   while (s.length % 4) s += "=";
-  const bin = atob(s);
-  const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
+  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+}
+
+function b64urlDecode(s) {
+  return new TextDecoder().decode(b64urlToBytes(s));
+}
+
+async function gunzipB64(b64) {
+  const bytes = b64urlToBytes(b64);
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  const buf = await new Response(stream).arrayBuffer();
+  return new TextDecoder().decode(buf);
 }
 
 // Восстановление/синхронизация истории из ссылки (данные шлёт бот в URL) → CloudStorage
@@ -644,8 +653,18 @@ async function handleRestore() {
   const params = new URLSearchParams(window.location.search);
   const restore = params.get("restore");
   if (!restore) return false;
+  const gz = params.get("gz") === "1";
+  if (gz && typeof DecompressionStream === "undefined") {
+    mb.hide(); tg.BackButton.hide(); app.classList.remove("top");
+    app.innerHTML = `<div class="title">Не удалось восстановить</div>
+      <div class="subtitle">Нужна более свежая версия Telegram (поддержка распаковки данных).</div>`;
+    return true;
+  }
   let sessions;
-  try { sessions = JSON.parse(b64urlDecode(restore)); } catch (e) { return false; }
+  try {
+    const json = gz ? await gunzipB64(restore) : b64urlDecode(restore);
+    sessions = JSON.parse(json);
+  } catch (e) { return false; }
   if (!Array.isArray(sessions)) return false;
 
   const sid = params.get("sid") || "";
@@ -664,10 +683,26 @@ async function handleRestore() {
     await csSet("hmig", "3");   // не запускать миграцию поверх синхронизированных
   }
 
+  const merge = params.get("merge") === "1";
   let list = [];
   try { list = JSON.parse((await csGet("hidx")) || "[]") || []; } catch (e) { list = []; }
   for (const s of sessions) {
     if (!s || !s.t) continue;
+    if (merge && String(s.d || "").trim()) {
+      // убрать устаревшие копии той же записи (та же категория + описание), чтобы не задваивалось
+      const keep = [];
+      for (const x of list) {
+        if (x.t === s.t) continue;
+        let dup = false;
+        try {
+          const ex = JSON.parse((await csGet("s" + x.t)) || "{}");
+          const exd = ex.d != null ? ex.d : ((ex.ans && ex.ans[0]) || "");
+          if (ex.c === s.c && String(exd).trim() === String(s.d).trim()) dup = true;
+        } catch (e) {}
+        if (dup) await csRemove("s" + x.t); else keep.push(x);
+      }
+      list = keep;
+    }
     await csSet("s" + s.t, JSON.stringify(s));
     if (!list.some(x => x.t === s.t)) list.push({ t: s.t, c: s.c });
   }
