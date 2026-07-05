@@ -64,6 +64,7 @@ const STYLE = `
   .sum-q { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
   .sum-text { background: var(--secondary-bg); border-radius: 12px;
     padding: 12px 14px; white-space: pre-wrap; line-height: 1.5; }
+  .sum-edit { min-height: 52px; }
   .situation { background: var(--secondary-bg); border-radius: 12px;
     padding: 10px 14px; margin-bottom: 18px; font-size: 14px;
     color: var(--hint); line-height: 1.45; white-space: pre-wrap; }
@@ -1103,48 +1104,54 @@ function renderCurrentPage() {
     setupMainButton("Далее");
   } else if (page.type === "summary") {
     let html = `<div class="progress">${esc(state.categoryTitle)} · итог</div>
-      <div class="title" style="margin-bottom:20px">Проверьте ответы</div>`;
-    if (description) {
-      const descLabel = cat.mode === "roles" ? "Идея" : "Ситуация";
+      <div class="title" style="margin-bottom:6px">Проверьте ответы</div>
+      <div class="subtitle" style="margin-bottom:20px">Можно поправить любой ответ прямо здесь.</div>`;
+    if (pages[0] && pages[0].type === "describe") {
+      const descLabel = cat.describeTitle || (cat.mode === "roles" ? "Идея" : "Ситуация");
       html += `<div class="sum-block">
-        <div class="sum-label">${descLabel}</div>
-        <div class="sum-text">${esc(description)}</div>
+        <div class="sum-label">${esc(descLabel)}</div>
+        <textarea class="sum-edit" id="sum-desc" placeholder="—">${esc(description)}</textarea>
       </div>`;
     }
     pages.forEach((p, pi) => {
       if (p.type === "question") {
         html += `<div class="sum-block">
           <div class="sum-q">${p.qnum}. ${esc(p.text)}</div>
-          <div class="sum-text">${esc(answers[pi] || "")}</div>
+          <textarea class="sum-edit" id="sum-${pi}">${esc(answers[pi] || "")}</textarea>
         </div>`;
-      } else if (p.type === "role") {
+      } else if (p.type === "role" || p.type === "step") {
         html += `<div class="sum-role">${esc(p.title)}</div>`;
         const arr = answers[pi] || [];
         p.questions.forEach((q, qi) => {
           html += `<div class="sum-block">
             <div class="sum-q">${esc(q)}</div>
-            <div class="sum-text">${esc(arr[qi] || "")}</div>
+            <textarea class="sum-edit" id="sum-${pi}-${qi}">${esc(arr[qi] || "")}</textarea>
           </div>`;
         });
-      } else if (p.type === "step") {
-        const arr = answers[pi] || [];
-        const filled = p.questions
-          .map((q, qi) => ({ q, a: (arr[qi] || "").trim() }))
-          .filter(x => x.a);
-        if (filled.length) {
-          html += `<div class="sum-role">${esc(p.title)}</div>`;
-          filled.forEach(x => {
-            html += `<div class="sum-block">
-              <div class="sum-q">${esc(x.q)}</div>
-              <div class="sum-text">${esc(x.a)}</div>
-            </div>`;
-          });
-        }
       }
     });
     app.innerHTML = html;
     setupMainButton("Сохранить");
   }
+}
+
+// Считывает отредактированные значения со страницы итога обратно в answers
+function syncSummaryEdits() {
+  const descEl = document.getElementById("sum-desc");
+  if (descEl) answers[0] = descEl.value;
+  pages.forEach((p, pi) => {
+    if (p.type === "question") {
+      const el = document.getElementById("sum-" + pi);
+      if (el) answers[pi] = el.value;
+    } else if (p.type === "role" || p.type === "step") {
+      const arr = Array.isArray(answers[pi]) ? answers[pi].slice() : [];
+      p.questions.forEach((q, qi) => {
+        const el = document.getElementById("sum-" + pi + "-" + qi);
+        if (el) arr[qi] = el.value;
+      });
+      answers[pi] = arr;
+    }
+  });
 }
 
 function setupMainButton(text) {
@@ -1246,6 +1253,7 @@ function bindInputs(ids) {
 }
 
 async function submit() {
+  syncSummaryEdits();   // подхватить правки, сделанные прямо на странице итога
   const description = (answers[0] || "").trim();
   const out = [];
   let num = 0;
