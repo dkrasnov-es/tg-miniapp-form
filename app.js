@@ -758,6 +758,7 @@ let answers = {};   // pageIndex -> string | string[]  (черновик, вре
 let pages = [];
 let idx = -1;
 let mode = "menu";  // menu | wizard | history | historyItem
+let historySession = null;  // сессия, открытая на экране historyItem (для повторной отправки)
 
 // ── Черновик (временное хранилище, отдельно от сохранённого в БД) ──────────
 const STORAGE_KEY = "psy_draft_v1";
@@ -1006,6 +1007,7 @@ async function openHistoryItem(t) {
     app.innerHTML = `<div class="subtitle">Не удалось прочитать запись.</div>`;
     return;
   }
+  historySession = session;
   transitionTo(() => renderHistoryItem(session));
 }
 
@@ -1038,6 +1040,7 @@ function renderHistoryItem(session) {
       </div>`;
     });
     app.innerHTML = html;
+    setupMainButton("Отправить боту ещё раз");
     return;
   }
 
@@ -1283,6 +1286,7 @@ function setupMainButton(text) {
 }
 
 function handleNext() {
+  if (mode === "historyItem") { resendHistoryItem(); return; }
   const page = pages[idx];
 
   if (page.type === "describe") {
@@ -1374,6 +1378,34 @@ function bindInputs(ids) {
   });
 }
 
+// sendData ограничен 4096 БАЙТАМИ (кириллица в UTF-8 — 2 байта/символ);
+// длинные сессии сжимаем gzip → base64 и шлём как {gz:"..."} — бот распакует.
+async function gzipB64(str) {
+  const cs = new CompressionStream("gzip");
+  const stream = new Blob([new TextEncoder().encode(str)]).stream().pipeThrough(cs);
+  const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+// Возвращает строку для tg.sendData либо null, если данные не влезают в лимит
+async function prepareSendData(payload) {
+  const raw = JSON.stringify(payload);
+  if (new TextEncoder().encode(raw).length <= 3800) return raw;
+  if (typeof CompressionStream !== "undefined") {
+    const wrapped = JSON.stringify({ gz: await gzipB64(raw) });
+    if (wrapped.length <= 4000) return wrapped;
+  }
+  return null;
+}
+
+function sendFailAlert() {
+  const msg = "Не получилось отправить: ответы слишком длинные. Они сохранены в «Мои сохранённые ответы» — попробуйте сократить текст.";
+  if (tg.showAlert) tg.showAlert(msg); else alert(msg);
+  tg.HapticFeedback.notificationOccurred("error");
+}
+
 async function submit() {
   syncSummaryEdits();   // подхватить правки, сделанные прямо на странице итога
   const description = (answers[0] || "").trim();
@@ -1398,14 +1430,31 @@ async function submit() {
     }
   });
   await saveToHistory(description, out);   // копия в CloudStorage — для просмотра внутри приложения
-  clearDraft();            // черновик больше не нужен — данные уходят на постоянное сохранение
-  tg.HapticFeedback.notificationOccurred("success");
-  tg.sendData(JSON.stringify({
+  const prepared = await prepareSendData({
     category: state.category,
     categoryTitle: state.categoryTitle,
     description,
     answers: out
-  }));
+  });
+  if (!prepared) { sendFailAlert(); return; }   // черновик НЕ трогаем — данные не ушли
+  clearDraft();            // черновик больше не нужен — данные уходят на постоянное сохранение
+  tg.HapticFeedback.notificationOccurred("success");
+  tg.sendData(prepared);
+}
+
+// Повторная отправка сессии из истории в бота (в БД) — например, если первая отправка не прошла
+async function resendHistoryItem() {
+  const s = historySession;
+  if (!s || !Array.isArray(s.items)) return;
+  const prepared = await prepareSendData({
+    category: s.c,
+    categoryTitle: s.ct,
+    description: s.d || "",
+    answers: s.items.map((it, i) => ({ num: i + 1, question: it.question, answer: it.answer, role: it.role || null }))
+  });
+  if (!prepared) { sendFailAlert(); return; }
+  tg.HapticFeedback.notificationOccurred("success");
+  tg.sendData(prepared);
 }
 
 // ── Старт ─────────────────────────────────────────────────────────────────

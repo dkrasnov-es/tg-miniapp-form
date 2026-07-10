@@ -76,7 +76,7 @@ def init_db():
     con.close()
 
 
-def save_response(message, data):
+def save_response(message, data, raw):
     con = sqlite3.connect(DB_PATH)
     cur = con.execute(
         """
@@ -91,7 +91,7 @@ def save_response(message, data):
             data.get("category"),
             data.get("categoryTitle"),
             data.get("description"),
-            message.web_app_data.data,
+            raw,
         ),
     )
     response_id = cur.lastrowid
@@ -218,13 +218,18 @@ async def start(message: Message):
 
 @dp.message(F.web_app_data)
 async def on_form(message: Message):
+    raw = message.web_app_data.data
     try:
-        data = json.loads(message.web_app_data.data)
-    except json.JSONDecodeError:
+        data = json.loads(raw)
+        # длинные сессии приходят gzip-сжатыми: {"gz": "<base64>"} (лимит sendData — 4096 байт)
+        if isinstance(data, dict) and set(data.keys()) == {"gz"}:
+            raw = gzip.decompress(base64.b64decode(data["gz"])).decode("utf-8")
+            data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError, OSError):
         await message.answer("⚠️ Не удалось разобрать данные формы.")
         return
 
-    response_id, n = save_response(message, data)
+    response_id, n = save_response(message, data, raw)
 
     await message.answer(
         "✅ Спасибо! Твои ответы сохранены.\n\n"
