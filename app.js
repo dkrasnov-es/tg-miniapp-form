@@ -880,6 +880,34 @@ function csSet(key, val) {
   return new Promise(res => { if (!CS) return res(false); CS.setItem(key, val, (e, ok) => res(!e && ok)); });
 }
 
+// Лимит значения CloudStorage ~4096 (кириллица в байтах — вдвое больше символов),
+// поэтому крупные сессии храним gzip-сжатыми с префиксом "GZ:".
+async function csSetSession(key, obj) {
+  let raw = JSON.stringify(obj);
+  if (new TextEncoder().encode(raw).length > 3900) {
+    if (typeof CompressionStream === "undefined") return false;
+    raw = "GZ:" + await gzipB64(raw);
+    if (raw.length > 4096) return false;
+  }
+  return csSet(key, raw);
+}
+
+// Читает сессию, прозрачно распаковывая сжатые записи. null — нет/не читается.
+async function csGetSession(key) {
+  let raw = await csGet(key);
+  if (!raw) return null;
+  try {
+    if (raw.startsWith("GZ:")) raw = await gunzipB64(raw.slice(3));
+    return JSON.parse(raw);
+  } catch (e) { return null; }
+}
+
+async function gunzipB64(b64) {
+  const bytes = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0));
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new TextDecoder().decode(await new Response(stream).arrayBuffer());
+}
+
 function fmtDate(t) {
   const d = new Date(Number(t));
   const p = n => String(n).padStart(2, "0");
@@ -891,7 +919,7 @@ async function saveToHistory(description, items) {
   const t = String(Date.now());
   // Храним ГОТОВЫЕ пары вопрос-ответ — показ не зависит от текущей структуры категории
   const payload = { c: state.category, ct: state.categoryTitle, t, d: description, items };
-  const ok = await csSet("s" + t, JSON.stringify(payload));
+  const ok = await csSetSession("s" + t, payload);
   if (!ok) return;  // не влезло/недоступно — в БД всё равно сохранено
   let list = [];
   try { list = JSON.parse((await csGet("hidx")) || "[]") || []; } catch (e) { list = []; }
@@ -944,18 +972,16 @@ async function migrateHistory() {
   let list = [];
   try { list = JSON.parse((await csGet("hidx")) || "[]") || []; } catch (e) { return; }
   for (const it of list) {
-    let raw;
-    try { raw = await csGet("s" + it.t); } catch (e) { continue; }
-    if (!raw) continue;
     let sess;
-    try { sess = JSON.parse(raw); } catch (e) { continue; }
+    try { sess = await csGetSession("s" + it.t); } catch (e) { continue; }
+    if (!sess) continue;
     if (Array.isArray(sess.items)) continue;     // уже новый формат — не трогаем
     const cat = CATEGORIES[sess.c];
     if (!cat) continue;                           // категория недоступна — оставляем как есть
     const ans = sess.ans || {};
     const items = resolveItems(buildPagesFromCat(legacyCatDef(sess.c, ans)), ans);
     const payload = { c: sess.c, ct: cat.title, t: sess.t, d: ans[0] || "", items };
-    try { await csSet("s" + sess.t, JSON.stringify(payload)); } catch (e) {}
+    try { await csSetSession("s" + sess.t, payload); } catch (e) {}
   }
   try { await csSet("hmig", "3"); } catch (e) {}
 }
@@ -1029,7 +1055,7 @@ async function handleRestore() {
         if (x.t === s.t) continue;
         let dup = false;
         try {
-          const ex = JSON.parse((await csGet("s" + x.t)) || "{}");
+          const ex = (await csGetSession("s" + x.t)) || {};
           const exd = ex.d != null ? ex.d : ((ex.ans && ex.ans[0]) || "");
           if (ex.c === s.c && String(exd).trim() === String(s.d).trim()) dup = true;
         } catch (e) {}
@@ -1037,7 +1063,7 @@ async function handleRestore() {
       }
       list = keep;
     }
-    await csSet("s" + s.t, JSON.stringify(s));
+    await csSetSession("s" + s.t, s);
     if (!list.some(x => x.t === s.t)) list.push({ t: s.t, c: s.c });
   }
   list.sort((a, b) => Number(b.t) - Number(a.t));
@@ -1092,15 +1118,10 @@ async function openHistoryItem(t) {
   mode = "historyItem";
   mb.hide();
   tg.BackButton.show();
-  const raw = await csGet("s" + t);
-  if (!raw) {
+  const session = await csGetSession("s" + t);
+  if (!session) {
     app.classList.remove("top");
     app.innerHTML = `<div class="subtitle">Запись не найдена.</div>`;
-    return;
-  }
-  let session;
-  try { session = JSON.parse(raw); } catch (e) {
-    app.innerHTML = `<div class="subtitle">Не удалось прочитать запись.</div>`;
     return;
   }
   historySession = session;
