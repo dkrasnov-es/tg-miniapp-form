@@ -74,6 +74,16 @@ const STYLE = `
   .role-q-text { font-size: 16px; font-weight: 600; line-height: 1.35; margin-bottom: 8px; }
   .role-q textarea { min-height: 76px; }
   .sum-role { font-size: 17px; font-weight: 700; margin: 24px 0 12px; }
+  .exp-add-row { display: flex; gap: 8px; margin-bottom: 18px; align-items: stretch; }
+  .exp-add-row textarea { min-height: 52px; }
+  .exp-add-btn { flex-shrink: 0; border: none; border-radius: 12px; background: var(--btn);
+    color: var(--btn-text); font-size: 15px; font-weight: 600; padding: 0 18px; cursor: pointer; }
+  .exp-row { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+  .exp-text { flex: 1; background: var(--secondary-bg); border-radius: 12px;
+    padding: 12px 14px; font-size: 16px; line-height: 1.4; white-space: pre-wrap; }
+  .exp-del { flex-shrink: 0; border: none; background: none; color: var(--hint);
+    font-size: 24px; line-height: 1; padding: 8px; cursor: pointer; }
+  .bucket-btn.selected { box-shadow: inset 0 0 0 2px var(--btn); }
 `;
 const styleEl = document.createElement("style");
 styleEl.textContent = STYLE;
@@ -578,6 +588,22 @@ const CATEGORIES = {
       }
     ]
   },
+  expectations: {
+    title: "Сортировка ожиданий",
+    mode: "sort",
+    describeTitle: "Перед каким делом вы стоите?",
+    describePrompt: "Опишите своими словами: какое дело или событие впереди?",
+    listTitle: "Выпишите ожидания",
+    listComment: "Что «должно» получиться? Как «должны» повести себя другие? Каким «должен» быть я? Выписывайте по одному — коротко, как приходит в голову.",
+    bucketComment: "Требование ломается о реальность и приносит боль; предпочтение оставляет место другому исходу. Куда честно отнести это ожидание?",
+    rewordWorld: "Требование к миру держит в напряжении: мир ему не подчиняется. Перепишите его как предпочтение — например: «Мне бы хотелось, чтобы …, но я готов и к другому исходу».",
+    rewordSelf: "Требование к себе превращает дело в экзамен. Перепишите его как намерение — например: «Я постараюсь …, и останусь в порядке, даже если выйдет иначе».",
+    buckets: [
+      { key: "world", title: "Требование к миру", sub: "«всё должно пройти гладко», «другие должны оценить»" },
+      { key: "self", title: "Требование к себе", sub: "«я должен сделать идеально», «мне нельзя ошибиться»" },
+      { key: "pref", title: "Предпочтение", sub: "«мне бы хотелось, но приму и другой исход»" }
+    ]
+  },
   council: {
     title: "Совет семи ролей",
     mode: "roles",
@@ -961,6 +987,17 @@ function loadDraft() {
 }
 function clearDraft() {
   try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+}
+
+// ── Режим sort («Сортировка ожиданий»): данные живут в answers.sort ─────────
+// items: [{text, bucket: "world"|"self"|"pref"|null, reword}] — стабильны при
+// перестройке страниц (страницы зависят от списка и выбранных корзин).
+function sortItems() {
+  if (!answers.sort) answers.sort = { items: [] };
+  return answers.sort.items;
+}
+function rebuildSortPages() {
+  pages = buildPagesFromCat(CATEGORIES[state.category]);
 }
 
 // ── История сохранённых ответов (Telegram CloudStorage, своя у каждого юзера) ──
@@ -1357,6 +1394,14 @@ function buildPagesFromCat(cat) {
     cat.steps.forEach((s, i) => {
       p.push({ type: "step", title: s.title, comment: s.comment, questions: s.questions, stepNum: i + 1, stepTotal: cat.steps.length });
     });
+  } else if (cat.mode === "sort") {
+    // страницы зависят от введённых ожиданий и выбранных корзин (answers.sort)
+    const items = (answers.sort && answers.sort.items) || [];
+    p.push({ type: "explist" });
+    items.forEach((it, i) => p.push({ type: "bucket", i }));
+    items.forEach((it, i) => {
+      if (it.bucket === "world" || it.bucket === "self") p.push({ type: "reword", i });
+    });
   } else {
     cat.items.forEach((it, i) => {
       p.push({ type: "comment", text: it.comment, qnum: i + 1 });
@@ -1406,8 +1451,8 @@ function chooseCategory(key) {
   state.category = key;
   state.categoryTitle = CATEGORIES[key].title;
   mode = "wizard";
+  answers = {};              // до buildPages: страницы sort-режима строятся из answers.sort
   pages = buildPages(key);
-  answers = {};
   idx = 0;
   saveDraft();
   tg.HapticFeedback.impactOccurred("light");
@@ -1419,7 +1464,7 @@ function renderCurrentPage() {
   const cat = CATEGORIES[state.category];
   const total = (cat.items || []).length;
   const description = answers[0] || "";
-  app.classList.toggle("top", page.type === "summary" || page.type === "question" || page.type === "role" || page.type === "step");
+  app.classList.toggle("top", page.type === "summary" || page.type === "question" || page.type === "role" || page.type === "step" || page.type === "explist" || page.type === "bucket" || page.type === "reword");
   tg.BackButton.show();
 
   if (page.type === "describe") {
@@ -1474,6 +1519,62 @@ function renderCurrentPage() {
     app.innerHTML = html;
     bindInputs(page.questions.map((q, i) => "input-" + i));
     setupMainButton("Далее");
+  } else if (page.type === "explist") {
+    app.innerHTML = `
+      <div class="situation"><b>Дело</b>${esc(description)}</div>
+      <div class="question">${esc(cat.listTitle)}</div>
+      <p class="comment" style="margin-bottom:20px">${esc(cat.listComment)}</p>
+      <div class="exp-add-row">
+        <textarea id="exp-input" placeholder="Ожидание…"></textarea>
+        <button class="exp-add-btn" id="exp-add">Добавить</button>
+      </div>
+      <div id="exp-list"></div>
+      <div class="err" id="err"></div>`;
+    renderExpList();
+    const inp = document.getElementById("exp-input");
+    document.getElementById("exp-add").onclick = () => {
+      const v = (inp.value || "").trim();
+      if (!v) return;
+      sortItems().push({ text: v, bucket: null, reword: "" });
+      inp.value = "";
+      rebuildSortPages(); saveDraft(); renderExpList();
+      tg.HapticFeedback.impactOccurred("light");
+      inp.focus();
+    };
+    setupMainButton("Далее");
+  } else if (page.type === "bucket") {
+    const items = sortItems();
+    const it = items[page.i];
+    let html = `<div class="progress">Ожидание ${page.i + 1} из ${items.length}</div>
+      <div class="situation"><b>Ожидание</b>${esc(it.text)}</div>
+      <p class="comment" style="margin-bottom:20px">${esc(cat.bucketComment)}</p>`;
+    cat.buckets.forEach(b => {
+      html += `<button class="cat-btn bucket-btn${it.bucket === b.key ? " selected" : ""}" data-b="${b.key}">${esc(b.title)}
+        <span class="cat-sub">${esc(b.sub)}</span></button>`;
+    });
+    html += `<div class="err" id="err"></div>`;
+    app.innerHTML = html;
+    app.querySelectorAll(".bucket-btn").forEach(btn => {
+      btn.onclick = () => {
+        it.bucket = btn.dataset.b;
+        rebuildSortPages(); saveDraft();
+        app.querySelectorAll(".bucket-btn").forEach(x => x.classList.toggle("selected", x.dataset.b === it.bucket));
+        tg.HapticFeedback.impactOccurred("light");
+      };
+    });
+    setupMainButton("Далее");
+  } else if (page.type === "reword") {
+    const it = sortItems()[page.i];
+    const isWorld = it.bucket === "world";
+    app.innerHTML = `
+      <div class="situation"><b>${isWorld ? "Требование к миру" : "Требование к себе"}</b>${esc(it.text)}</div>
+      <div class="question">Переформулируйте в предпочтение</div>
+      <p class="comment" style="margin-bottom:20px">${esc(isWorld ? cat.rewordWorld : cat.rewordSelf)}</p>
+      <textarea id="input" placeholder="Мне бы хотелось…">${esc(it.reword || "")}</textarea>
+      <div class="err" id="err"></div>`;
+    const el = document.getElementById("input");
+    el.oninput = () => { it.reword = el.value; saveDraft(); };
+    setupMainButton("Далее");
   } else if (page.type === "summary") {
     let html = `<div class="progress">${esc(state.categoryTitle)} · итог</div>
       <div class="title" style="margin-bottom:6px">Проверьте ответы</div>
@@ -1502,15 +1603,56 @@ function renderCurrentPage() {
         });
       }
     });
+    if (cat.mode === "sort") {
+      const items = sortItems();
+      cat.buckets.forEach(b => {
+        const group = items.map((it, i) => ({ it, i })).filter(x => x.it.bucket === b.key);
+        if (!group.length) return;
+        html += `<div class="sum-role">${esc(b.title)}</div>`;
+        group.forEach(({ it, i }) => {
+          if (b.key === "pref") {
+            html += `<div class="sum-block"><div class="sum-text">${esc(it.text)}</div></div>`;
+          } else {
+            html += `<div class="sum-block">
+              <div class="sum-q">${esc(it.text)}</div>
+              <textarea class="sum-edit" id="sum-rw-${i}">${esc(it.reword || "")}</textarea>
+            </div>`;
+          }
+        });
+      });
+    }
     app.innerHTML = html;
     setupMainButton("Сохранить");
   }
+}
+
+// Список ожиданий на странице explist (перерисовывается при добавлении/удалении)
+function renderExpList() {
+  const box = document.getElementById("exp-list");
+  if (!box) return;
+  const items = sortItems();
+  box.innerHTML = items.map((it, i) =>
+    `<div class="exp-row"><div class="exp-text">${esc(it.text)}</div>
+     <button class="exp-del" data-i="${i}" aria-label="Удалить">×</button></div>`).join("");
+  box.querySelectorAll(".exp-del").forEach(b => {
+    b.onclick = () => {
+      sortItems().splice(Number(b.dataset.i), 1);
+      rebuildSortPages(); saveDraft(); renderExpList();
+    };
+  });
 }
 
 // Считывает отредактированные значения со страницы итога обратно в answers
 function syncSummaryEdits() {
   const descEl = document.getElementById("sum-desc");
   if (descEl) answers[0] = descEl.value;
+  const sortCat = CATEGORIES[state.category];
+  if (sortCat && sortCat.mode === "sort") {
+    sortItems().forEach((it, i) => {
+      const el = document.getElementById("sum-rw-" + i);
+      if (el) it.reword = el.value;
+    });
+  }
   pages.forEach((p, pi) => {
     if (p.type === "question") {
       const el = document.getElementById("sum-" + pi);
@@ -1558,6 +1700,18 @@ function handleNext() {
     const arr = [];
     for (let i = 0; i < page.questions.length; i++) arr.push(val("input-" + i));
     answers[idx] = arr;
+  } else if (page.type === "explist") {
+    // подхватить недобавленный текст из поля ввода
+    const pending = val("exp-input");
+    if (pending) {
+      sortItems().push({ text: pending, bucket: null, reword: "" });
+      rebuildSortPages();
+    }
+    if (!sortItems().length) return showError("Добавьте хотя бы одно ожидание");
+  } else if (page.type === "bucket") {
+    if (!sortItems()[page.i].bucket) return showError("Выберите, куда отнести это ожидание");
+  } else if (page.type === "reword") {
+    if (!(sortItems()[page.i].reword || "").trim()) return showError("Напишите переформулировку, чтобы продолжить");
   } else if (page.type === "summary") {
     submit();
     return;
@@ -1676,6 +1830,22 @@ async function submit() {
       });
     }
   });
+  const cat = CATEGORIES[state.category];
+  if (cat.mode === "sort") {
+    // группируем по корзинам; question = исходное ожидание, answer = итоговая формулировка
+    const items = sortItems();
+    cat.buckets.forEach(b => {
+      items.filter(it => it.bucket === b.key).forEach(it => {
+        num++;
+        out.push({
+          num,
+          question: it.text,
+          answer: b.key === "pref" ? it.text : (it.reword || "").trim(),
+          role: b.title
+        });
+      });
+    });
+  }
   await saveToHistory(description, out);   // копия в CloudStorage — для просмотра внутри приложения
   const prepared = await prepareSendData({
     category: state.category,
@@ -1714,8 +1884,8 @@ async function init() {
     state.category = draft.category;
     state.categoryTitle = CATEGORIES[draft.category].title;
     mode = "wizard";
+    answers = draft.answers || {};   // до buildPages: sort-страницы строятся из answers.sort
     pages = buildPages(draft.category);
-    answers = draft.answers || {};
     idx = (typeof draft.idx === "number" && draft.idx >= 0 && draft.idx < pages.length) ? draft.idx : 0;
     renderCurrentPage();
   } else {
