@@ -901,12 +901,7 @@ async function csGetSession(key) {
     return JSON.parse(raw);
   } catch (e) { return null; }
 }
-
-async function gunzipB64(b64) {
-  const bytes = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0));
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-  return new TextDecoder().decode(await new Response(stream).arrayBuffer());
-}
+// (распаковка — gunzipB64 ниже, она понимает и обычный, и urlsafe base64)
 
 function fmtDate(t) {
   const d = new Date(Number(t));
@@ -1020,12 +1015,15 @@ async function handleRestore() {
       <div class="subtitle">Нужна более свежая версия Telegram (поддержка распаковки данных).</div>`;
     return true;
   }
-  let sessions;
-  try {
-    const json = gz ? await gunzipB64(restore) : b64urlDecode(restore);
-    sessions = JSON.parse(json);
-  } catch (e) { return false; }
-  if (!Array.isArray(sessions)) return false;
+  const frag = params.get("frag");   // "t:i:n" — restore содержит кусок b64 большой сессии
+  let sessions = null;
+  if (!frag) {
+    try {
+      const json = gz ? await gunzipB64(restore) : b64urlDecode(restore);
+      sessions = JSON.parse(json);
+    } catch (e) { return false; }
+    if (!Array.isArray(sessions)) return false;
+  }
 
   const sid = params.get("sid") || "";
   const part = params.get("part") || "1";
@@ -1041,6 +1039,46 @@ async function handleRestore() {
     await csSet("hidx", "[]");
     await csSet("syncSid", sid);
     await csSet("hmig", "3");   // не запускать миграцию поверх синхронизированных
+  }
+
+  // Фрагмент большой сессии: копим куски в CloudStorage, при полном комплекте собираем
+  if (frag) {
+    const [ft, fi, fn] = frag.split(":");
+    const n = Number(fn);
+    await csSet("fr" + ft + "_" + fi, restore);
+    const pieces = [];
+    let complete = true;
+    for (let k = 0; k < n; k++) {
+      const p = await csGet("fr" + ft + "_" + k);
+      if (!p) { complete = false; break; }
+      pieces.push(p);
+    }
+    let status = `Получена часть большой записи (${Number(fi) + 1}/${n}).`;
+    if (complete) {
+      let saved = false;
+      try {
+        const s = JSON.parse(await gunzipB64(pieces.join("")))[0];
+        if (s && s.t && await csSetSession("s" + s.t, s)) {
+          let list = [];
+          try { list = JSON.parse((await csGet("hidx")) || "[]") || []; } catch (e) { list = []; }
+          if (!list.some(x => x.t === s.t)) list.push({ t: s.t, c: s.c });
+          list.sort((a, b) => Number(b.t) - Number(a.t));
+          await csSet("hidx", JSON.stringify(list));
+          saved = true;
+        }
+      } catch (e) {}
+      for (let k = 0; k < n; k++) await csRemove("fr" + ft + "_" + k);
+      status = saved ? "Большая запись собрана и сохранена." : "Не удалось собрать запись — попробуйте ещё раз с первой кнопки.";
+    }
+    mb.hide(); tg.BackButton.hide(); app.classList.remove("top");
+    const doneAll = part === total;
+    app.innerHTML = `<div class="title">Синхронизация</div>
+      <div class="subtitle">${status} Часть ${esc(part)} из ${esc(total)}.<br><br>
+      ${doneAll ? "Готово — открой «Мои ответы»." : "Нажми следующую кнопку в чате с ботом."}</div>
+      <button class="cat-btn" id="go-hist">📚 Мои ответы</button>`;
+    const b = document.getElementById("go-hist");
+    if (b) b.onclick = () => openHistory();
+    return true;
   }
 
   const merge = params.get("merge") === "1";

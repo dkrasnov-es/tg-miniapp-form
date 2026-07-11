@@ -307,18 +307,38 @@ def _b64(sessions):
     return base64.urlsafe_b64encode(gzip.compress(raw)).decode().rstrip("=")
 
 
-def chunk_sessions(sessions, budget=1500):
-    # Пакуем сессии в части так, чтобы каждая ссылка уместилась в лимит URL
-    chunks, cur = [], []
+def build_sync_parts(sessions, budget=1500):
+    # Пакуем сессии в части так, чтобы каждая ссылка уместилась в лимит URL.
+    # Сессия, не влезающая в одну ссылку даже одна, режется на фрагменты
+    # ("f", (t, i, n, кусок b64)) — приложение соберёт их обратно через CloudStorage.
+    parts, cur = [], []
     for s in sessions:
-        if cur and len(_b64(cur + [s])) > budget:
-            chunks.append(cur)
+        single = _b64([s])
+        if len(single) > budget:
+            if cur:
+                parts.append(("s", cur))
+                cur = []
+            n = -(-len(single) // budget)  # ceil
+            for i in range(n):
+                parts.append(("f", (s["t"], i, n, single[i * budget:(i + 1) * budget])))
+        elif cur and len(_b64(cur + [s])) > budget:
+            parts.append(("s", cur))
             cur = [s]
         else:
             cur.append(s)
     if cur:
-        chunks.append(cur)
-    return chunks
+        parts.append(("s", cur))
+    return parts
+
+
+def _part_url(kind, data, sid, k, total):
+    base = f"{FORM_URL}?part={k}&total={total}&gz=1"
+    if sid:
+        base += f"&sid={sid}"
+    if kind == "s":
+        return f"{base}&restore={_b64(data)}"
+    t, i, n, chunk = data
+    return f"{base}&frag={t}:{i}:{n}&restore={chunk}"
 
 
 @dp.message(Command("sync"))
@@ -330,14 +350,14 @@ async def cmd_sync(message: Message):
     sid = str(int(message.date.timestamp()))
     # Данные gzip-сжаты; держим URL кнопки коротким (лимит длины у web_app-кнопок жёсткий)
     for budget in (1500, 1000, 700):
-        chunks = chunk_sessions(sessions, budget)
-        total = len(chunks)
+        parts = build_sync_parts(sessions, budget)
+        total = len(parts)
         rows = [
             [InlineKeyboardButton(
                 text=f"🔄 Синхронизировать {k}/{total}",
-                web_app=WebAppInfo(url=f"{FORM_URL}?sid={sid}&part={k}&total={total}&gz=1&restore={_b64(ch)}"),
+                web_app=WebAppInfo(url=_part_url(kind, data, sid, k, total)),
             )]
-            for k, ch in enumerate(chunks, 1)
+            for k, (kind, data) in enumerate(parts, 1)
         ]
         try:
             await message.answer(
@@ -390,15 +410,34 @@ async def cmd_restore(message: Message):
             for a in arows
         ],
     }
-    url = f"{FORM_URL}?merge=1&gz=1&restore={_b64([session])}"
+    single = _b64([session])
+    budget = 1500
+    if len(single) <= budget:
+        rows = [[InlineKeyboardButton(
+            text=f"➕ Восстановить #{rid}",
+            web_app=WebAppInfo(url=f"{FORM_URL}?merge=1&gz=1&restore={single}"),
+        )]]
+        hint = "нажми кнопку."
+    else:
+        # запись не влезает в одну ссылку — режем на фрагменты, приложение соберёт
+        n = -(-len(single) // budget)
+        rows = [
+            [InlineKeyboardButton(
+                text=f"➕ Восстановить #{rid} ({i + 1}/{n})",
+                web_app=WebAppInfo(
+                    url=f"{FORM_URL}?merge=1&gz=1&part={i + 1}&total={n}"
+                        f"&frag={session['t']}:{i}:{n}&restore={single[i * budget:(i + 1) * budget]}"
+                ),
+            )]
+            for i in range(n)
+        ]
+        hint = "нажимай кнопки по порядку."
     try:
         await message.answer(
             f"Восстановить запись #{rid} (<b>{html.escape(r['category_title'])}</b>) в приложение — "
-            "нажми кнопку. Остальная история не тронется; добавится/обновится только эта запись.",
+            f"{hint} Остальная история не тронется; добавится/обновится только эта запись.",
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=f"➕ Восстановить #{rid}", web_app=WebAppInfo(url=url)),
-            ]]),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
     except Exception as e:
         logging.warning("restore send failed: %s", e)
