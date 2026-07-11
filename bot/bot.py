@@ -348,34 +348,41 @@ async def cmd_sync(message: Message):
         await message.answer("Нет сохранённых записей для синхронизации.")
         return
     sid = str(int(message.date.timestamp()))
-    # Данные gzip-сжаты; держим URL кнопки коротким (лимит длины у web_app-кнопок жёсткий)
-    for budget in (1500, 1000, 700):
-        parts = build_sync_parts(sessions, budget)
-        total = len(parts)
-        rows = [
-            [InlineKeyboardButton(
-                text=f"🔄 Синхронизировать {k}/{total}",
-                web_app=WebAppInfo(url=_part_url(kind, data, sid, k, total)),
-            )]
-            for k, (kind, data) in enumerate(parts, 1)
-        ]
-        try:
+    # Данные gzip-сжаты; держим URL кнопки коротким (лимит длины у web_app-кнопок жёсткий).
+    # Суммарная разметка одного сообщения тоже лимитирована («reply markup is too long»),
+    # поэтому кнопки шлём пачками по несколько сообщений.
+    parts = build_sync_parts(sessions, 1500)
+    total = len(parts)
+    rows = [
+        [InlineKeyboardButton(
+            text=f"🔄 Синхронизировать {k}/{total}",
+            web_app=WebAppInfo(url=_part_url(kind, data, sid, k, total)),
+        )]
+        for k, (kind, data) in enumerate(parts, 1)
+    ]
+    per_msg = 4
+    try:
+        await message.answer(
+            f"🔄 Синхронизация истории из БД: <b>{len(sessions)}</b> записей, <b>{total}</b> "
+            f"{'часть' if total == 1 else 'частей'}"
+            + (f" в <b>{-(-total // per_msg)}</b> сообщениях" if total > per_msg else "") + ".\n\n"
+            "Нажимай кнопки <b>по порядку</b> (1, 2, …). Первая очистит текущую in-app "
+            "историю и зальёт всё из базы заново. После последней открой «📚 Мои ответы».",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows[:per_msg]),
+        )
+        for i in range(per_msg, len(rows), per_msg):
+            await asyncio.sleep(0.4)  # не упереться в rate limit
             await message.answer(
-                f"🔄 Синхронизация истории из БД: <b>{len(sessions)}</b> записей, <b>{total}</b> "
-                f"{'часть' if total == 1 else 'частей'}.\n\n"
-                "Нажимай кнопки <b>по порядку</b> (1, 2, …). Первая очистит текущую in-app "
-                "историю и зальёт всё из базы заново. После последней открой «📚 Мои ответы».",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+                f"…продолжение ({i + 1}–{min(i + per_msg, total)} из {total}):",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows[i:i + per_msg]),
             )
-            return
-        except Exception as e:
-            logging.warning("sync send failed at budget %s: %s", budget, e)
-            continue
-    await message.answer(
-        "Не удалось сформировать синхронизацию — записи слишком большие для передачи ссылкой. "
-        "Смотри их через /my."
-    )
+    except Exception as e:
+        logging.warning("sync send failed: %s", e)
+        await message.answer(
+            "Не удалось сформировать синхронизацию. Попробуй восстановить нужную запись "
+            "отдельно: /restore <номер> (номера — в /my)."
+        )
 
 
 @dp.message(Command("restore"))
