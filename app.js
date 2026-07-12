@@ -604,6 +604,50 @@ const CATEGORIES = {
       { key: "pref", title: "Предпочтение", sub: "«мне бы хотелось, но приму и другой исход»" }
     ]
   },
+  longterm_goal: {
+    title: "Цель без хватки",
+    describeTitle: "Ваша долгосрочная цель",
+    describePrompt: "Опишите своими словами: какой долгосрочной цели вы хотите достичь?",
+    reviewPicker: true,   // после вопросов — выбор дня пересмотра цели (кнопки пн–вс)
+    saveGoalCard: true,   // при сохранении пишет карточку активной цели в CloudStorage
+    items: [
+      {
+        comment: "Цель-результат не всегда в ваших руках, направление — всегда. «Стать топ-автором» → «писать честно и регулярно»: направлению нельзя не соответствовать из-за внешнего провала.",
+        question: "Каким я хочу быть в этом деле независимо от исхода — какое моё направление?"
+      },
+      {
+        comment: "Живой образ лучшего исхода — топливо. Но работает он только в паре со следующим шагом, иначе мозг «уже пожил» в достигнутом и снимает мобилизацию.",
+        question: "Как выглядит лучший исход и что в нём для меня самое притягательное?"
+      },
+      {
+        comment: "Теперь заземлим образ: главное препятствие обычно не снаружи, а внутри — эмоция, привычка, убеждение.",
+        question: "Что во мне вероятнее всего встанет между мной и целью?"
+      },
+      {
+        comment: "Заготовленный ответ срабатывает сам в нужный момент. Форма: «если [препятствие], то я [конкретное действие]».",
+        question: "Если препятствие случится — что именно я сделаю? Запишите в форме «если …, то я …»"
+      }
+    ]
+  },
+  pre_step: {
+    title: "Перед делом",
+    mode: "practice",
+    hidden: true,   // не показывается в меню — открывается кнопкой «Перед делом» при активной цели
+    items: [
+      {
+        question: "Какой один шаг к цели я сделаю сейчас?",
+        placeholder: "Например: написать черновик письма клиенту…"
+      },
+      {
+        question: "Каким я уже представил результат шага? Допишите: «Если выйдет по-другому — я…»",
+        placeholder: "Клиент согласится на встречу. Если выйдет по-другому — я напишу следующему из списка."
+      },
+      {
+        question: "По чему я пойму, что делаю шаг хорошо, — прямо во время дела, а не по результату потом?",
+        placeholder: "Например: пишу 30 минут не отвлекаясь на телефон; говорю медленно и слушаю до конца."
+      }
+    ]
+  },
   council: {
     title: "Совет семи ролей",
     mode: "roles",
@@ -973,6 +1017,8 @@ let pages = [];
 let idx = -1;
 let mode = "menu";  // menu | wizard | history | historyItem
 let historySession = null;  // сессия, открытая на экране historyItem (для повторной отправки)
+let activeGoal = null;      // карточка активной цели из CloudStorage (ключ "goal") — для «Перед делом»
+const WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"];
 
 // ── Черновик (временное хранилище, отдельно от сохранённого в БД) ──────────
 const STORAGE_KEY = "psy_draft_v1";
@@ -1402,12 +1448,19 @@ function buildPagesFromCat(cat) {
     items.forEach((it, i) => {
       if (it.bucket === "world" || it.bucket === "self") p.push({ type: "reword", i });
     });
+  } else if (cat.mode === "practice") {
+    // короткий ритуал: только вопросы, без describe-страницы
+    p.length = 0;
+    cat.items.forEach((it, i) => {
+      p.push({ type: "question", text: it.question, qnum: i + 1, placeholder: it.placeholder });
+    });
   } else {
     cat.items.forEach((it, i) => {
       p.push({ type: "comment", text: it.comment, qnum: i + 1 });
       p.push({ type: "question", text: it.question, qnum: i + 1 });
     });
   }
+  if (cat.reviewPicker) p.push({ type: "weekday" });
   p.push({ type: "summary" });
   return p;
 }
@@ -1432,8 +1485,10 @@ function renderCategory() {
   tg.BackButton.hide();
   app.classList.remove("top");
   let html = `<div class="title">С какой проблемой поработаем?</div>
-    <div class="subtitle">Выберите тему — дальше пройдём её по шагам.</div>`;
+    <div class="subtitle">Выберите тему — дальше пройдём её по шагам.</div>
+    <div id="goal-slot"></div>`;
   for (const key in CATEGORIES) {
+    if (CATEGORIES[key].hidden) continue;
     html += `<button class="cat-btn" data-cat="${key}">${CATEGORIES[key].title}</button>`;
   }
   html += `<button class="cat-btn" disabled>Другие темы
@@ -1445,6 +1500,20 @@ function renderCategory() {
   });
   const hb = app.querySelector("[data-history]");
   if (hb) hb.onclick = () => openHistory();
+  renderGoalButton();
+}
+
+// Кнопка «Перед делом» на стартовом экране — только при активной цели
+async function renderGoalButton() {
+  const slot = document.getElementById("goal-slot");
+  if (!slot) return;
+  activeGoal = await csGetSession("goal");
+  if (!activeGoal || mode !== "menu") return;
+  const steps = activeGoal.steps || 0;
+  const dir = (activeGoal.dir || activeGoal.d || "").slice(0, 60);
+  slot.innerHTML = `<button class="cat-btn" id="goal-go" style="box-shadow: inset 0 0 0 2px var(--btn)">▶ Перед делом${steps ? ` · шагов: ${steps}` : ""}
+    <span class="cat-sub">цель: ${esc(dir)}</span></button>`;
+  document.getElementById("goal-go").onclick = () => chooseCategory("pre_step");
 }
 
 function chooseCategory(key) {
@@ -1482,11 +1551,17 @@ function renderCurrentPage() {
       <p class="comment">${page.text}</p>`;
     setupMainButton("Далее");
   } else if (page.type === "question") {
+    let head = "";
+    if (pages[0] && pages[0].type === "describe") {
+      head = `<div class="situation"><b>Ваша ситуация</b>${esc(description)}</div>`;
+    } else if (cat.mode === "practice" && activeGoal && page.qnum === 1) {
+      head = `<div class="situation"><b>Моё направление</b>${esc(activeGoal.dir || activeGoal.d || "")}</div>`;
+    }
     app.innerHTML = `
-      <div class="situation"><b>Ваша ситуация</b>${esc(description)}</div>
+      ${head}
       <div class="progress">Вопрос ${page.qnum} из ${total}</div>
       <div class="question">${page.text}</div>
-      <textarea id="input" placeholder="Ваш ответ..."></textarea>
+      <textarea id="input" placeholder="${esc(page.placeholder || "Ваш ответ...")}"></textarea>
       <div class="err" id="err"></div>`;
     bindInputs(["input"]);
     setupMainButton("Далее");
@@ -1575,6 +1650,23 @@ function renderCurrentPage() {
     const el = document.getElementById("input");
     el.oninput = () => { it.reword = el.value; saveDraft(); };
     setupMainButton("Далее");
+  } else if (page.type === "weekday") {
+    let html = `<div class="question">День пересмотра цели</div>
+      <p class="comment" style="margin-bottom:20px">Цель полезно трогать редко и по расписанию: в назначенный день — пересматриваю (10 минут), в остальные — только текущий шаг. Бот напомнит.</p>`;
+    WEEKDAYS.forEach(d => {
+      html += `<button class="cat-btn bucket-btn${answers[idx] === d ? " selected" : ""}" data-d="${d}">${d}</button>`;
+    });
+    html += `<div class="err" id="err"></div>`;
+    app.innerHTML = html;
+    app.querySelectorAll(".bucket-btn").forEach(btn => {
+      btn.onclick = () => {
+        answers[idx] = btn.dataset.d;
+        saveDraft();
+        app.querySelectorAll(".bucket-btn").forEach(x => x.classList.toggle("selected", x.dataset.d === answers[idx]));
+        tg.HapticFeedback.impactOccurred("light");
+      };
+    });
+    setupMainButton("Далее");
   } else if (page.type === "summary") {
     let html = `<div class="progress">${esc(state.categoryTitle)} · итог</div>
       <div class="title" style="margin-bottom:6px">Проверьте ответы</div>
@@ -1601,6 +1693,11 @@ function renderCurrentPage() {
             <textarea class="sum-edit" id="sum-${pi}-${qi}">${esc(arr[qi] || "")}</textarea>
           </div>`;
         });
+      } else if (p.type === "weekday") {
+        html += `<div class="sum-block">
+          <div class="sum-q">День пересмотра цели</div>
+          <div class="sum-text">${esc(answers[pi] || "—")}</div>
+        </div>`;
       }
     });
     if (cat.mode === "sort") {
@@ -1712,6 +1809,8 @@ function handleNext() {
     if (!sortItems()[page.i].bucket) return showError("Выберите, куда отнести это ожидание");
   } else if (page.type === "reword") {
     if (!(sortItems()[page.i].reword || "").trim()) return showError("Напишите переформулировку, чтобы продолжить");
+  } else if (page.type === "weekday") {
+    if (!answers[idx]) return showError("Выберите день пересмотра");
   } else if (page.type === "summary") {
     submit();
     return;
@@ -1809,13 +1908,16 @@ function sendFailAlert() {
 
 async function submit() {
   syncSummaryEdits();   // подхватить правки, сделанные прямо на странице итога
-  const description = (answers[0] || "").trim();
+  const description = (pages[0] && pages[0].type === "describe") ? (answers[0] || "").trim() : "";
   const out = [];
   let num = 0;
   pages.forEach((p, pi) => {
     if (p.type === "question") {
       num++;
       out.push({ num, question: p.text, answer: (answers[pi] || "").trim(), role: null });
+    } else if (p.type === "weekday") {
+      num++;
+      out.push({ num, question: "День пересмотра цели", answer: answers[pi] || "", role: null });
     } else if (p.type === "role") {
       const arr = answers[pi] || [];
       p.questions.forEach((q, qi) => {
@@ -1845,6 +1947,25 @@ async function submit() {
         });
       });
     });
+  }
+  // Карточка активной цели: пишется при сохранении «Цели без хватки», шаги копит практика
+  if (cat.saveGoalCard) {
+    const qa = {};
+    pages.forEach((p, pi) => { if (p.type === "question") qa[p.qnum] = (answers[pi] || "").trim(); });
+    const dayPage = pages.findIndex(p => p.type === "weekday");
+    await csSetSession("goal", {
+      t: String(Date.now()),
+      d: description,                 // цель как сформулирована
+      dir: qa[1] || "",               // направление
+      obstacle: qa[3] || "",
+      plan: qa[4] || "",
+      day: (dayPage >= 0 && answers[dayPage]) || "",
+      steps: 0
+    });
+  }
+  if (cat.mode === "practice") {
+    const g = await csGetSession("goal");
+    if (g) { g.steps = (g.steps || 0) + 1; await csSetSession("goal", g); }
   }
   await saveToHistory(description, out);   // копия в CloudStorage — для просмотра внутри приложения
   const prepared = await prepareSendData({
@@ -1885,6 +2006,7 @@ async function init() {
     state.categoryTitle = CATEGORIES[draft.category].title;
     mode = "wizard";
     answers = draft.answers || {};   // до buildPages: sort-страницы строятся из answers.sort
+    if (CATEGORIES[draft.category].mode === "practice") activeGoal = await csGetSession("goal");
     pages = buildPages(draft.category);
     idx = (typeof draft.idx === "number" && draft.idx >= 0 && draft.idx < pages.length) ? draft.idx : 0;
     renderCurrentPage();

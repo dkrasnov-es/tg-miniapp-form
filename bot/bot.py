@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
@@ -72,6 +72,10 @@ def init_db():
     cols = [r[1] for r in con.execute("PRAGMA table_info(answers)")]
     if "role" not in cols:
         con.execute("ALTER TABLE answers ADD COLUMN role TEXT")
+    # напоминания о дне пересмотра цели: не слать дважды в один день
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS goal_reminders (user_id INTEGER, date TEXT, PRIMARY KEY (user_id, date))"
+    )
     con.commit()
     con.close()
 
@@ -451,6 +455,74 @@ async def cmd_restore(message: Message):
         await message.answer("Не удалось сформировать ссылку восстановления (запись слишком большая).")
 
 
+WEEKDAY_IDX = {
+    "понедельник": 0, "вторник": 1, "среда": 2, "четверг": 3,
+    "пятница": 4, "суббота": 5, "воскресенье": 6,
+}
+
+
+def users_due_goal_review(today_idx, today_str):
+    # Последняя «Цель без хватки» каждого пользователя; matched по дню пересмотра
+    con = sqlite3.connect(DB_PATH)
+    con.row_factory = sqlite3.Row
+    rows = con.execute(
+        "SELECT r.id, r.tg_user_id, r.description FROM responses r "
+        "JOIN (SELECT tg_user_id, MAX(id) AS mid FROM responses "
+        "      WHERE category = 'longterm_goal' GROUP BY tg_user_id) m ON r.id = m.mid"
+    ).fetchall()
+    due = []
+    for r in rows:
+        day = con.execute(
+            "SELECT answer FROM answers WHERE response_id = ? AND question LIKE 'День пересмотра%'",
+            (r["id"],),
+        ).fetchone()
+        if not day or WEEKDAY_IDX.get((day["answer"] or "").strip().lower()) != today_idx:
+            continue
+        sent = con.execute(
+            "SELECT 1 FROM goal_reminders WHERE user_id = ? AND date = ?",
+            (r["tg_user_id"], today_str),
+        ).fetchone()
+        if not sent:
+            due.append(r)
+    con.close()
+    return due
+
+
+def mark_reminded(user_id, today_str):
+    con = sqlite3.connect(DB_PATH)
+    con.execute("INSERT OR IGNORE INTO goal_reminders (user_id, date) VALUES (?, ?)", (user_id, today_str))
+    con.commit()
+    con.close()
+
+
+async def goal_reminder_loop(bot):
+    # Раз в полчаса: если сегодня чей-то день пересмотра и время >= 07:00 UTC — напомнить (один раз в день)
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            if now.hour >= 7:
+                today_str = now.strftime("%Y-%m-%d")
+                for r in users_due_goal_review(now.weekday(), today_str):
+                    goal = (r["description"] or "").strip()
+                    try:
+                        await bot.send_message(
+                            r["tg_user_id"],
+                            "🎯 Сегодня день пересмотра цели"
+                            + (f":\n<i>{html.escape(goal)}</i>\n\n" if goal else ".\n\n")
+                            + "10 минут, три вопроса: направление ещё моё? препятствие то же? "
+                            "связка «если — то» работает?\n\n"
+                            "Пересобрать цель — категория «Цель без хватки» в приложении. "
+                            "В остальные дни цель не трогаем — только текущий шаг (кнопка «▶ Перед делом»).",
+                            parse_mode="HTML",
+                        )
+                        mark_reminded(r["tg_user_id"], today_str)
+                    except Exception as e:
+                        logging.warning("goal reminder to %s failed: %s", r["tg_user_id"], e)
+        except Exception:
+            logging.exception("goal_reminder_loop iteration failed")
+        await asyncio.sleep(1800)
+
+
 async def main():
     init_db()
     bot = Bot(TOKEN)
@@ -461,6 +533,7 @@ async def main():
     ])
     me = await bot.get_me()
     logging.info("Бот запущен: @%s | FORM_URL=%s", me.username, FORM_URL)
+    asyncio.create_task(goal_reminder_loop(bot))
     await dp.start_polling(bot)
 
 
