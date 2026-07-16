@@ -84,6 +84,18 @@ const STYLE = `
   .exp-del { flex-shrink: 0; border: none; background: none; color: var(--hint);
     font-size: 24px; line-height: 1; padding: 8px; cursor: pointer; }
   .bucket-btn.selected { box-shadow: inset 0 0 0 2px var(--btn); }
+  .scale-row { margin-bottom: 26px; }
+  .scale-q { font-size: 16px; font-weight: 600; line-height: 1.35; margin-bottom: 10px; }
+  .scale-row input[type=range] { width: 100%; accent-color: var(--btn); }
+  .scale-ends { display: flex; justify-content: space-between; color: var(--hint); font-size: 12px; }
+  .scale-val { text-align: center; font-size: 22px; font-weight: 700; color: var(--btn); }
+  .cmp-row { display: flex; align-items: baseline; gap: 10px; background: var(--secondary-bg);
+    border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+  .cmp-q { flex: 1; font-size: 14px; line-height: 1.35; }
+  .cmp-nums { font-size: 16px; font-weight: 700; white-space: nowrap; }
+  .cmp-gap { font-size: 13px; font-weight: 600; }
+  .cmp-good { color: #2e9e5b; }
+  .cmp-bad { color: #e53935; }
 `;
 const styleEl = document.createElement("style");
 styleEl.textContent = STYLE;
@@ -604,6 +616,44 @@ const CATEGORIES = {
       { key: "pref", title: "Предпочтение", sub: "«мне бы хотелось, но приму и другой исход»" }
     ]
   },
+  talk_fear: {
+    title: "Страх перед разговором",
+    describePrompt: "Опишите своими словами: какой разговор предстоит и с кем?",
+    items: [
+      {
+        comment: "Страх любит общее «будет ужасно». Разбору поддаётся конкретика.",
+        question: "Чего именно я боюсь в этом разговоре — что конкретно может произойти?"
+      },
+      {
+        comment: "Прокручивание перед разговором ощущается подготовкой, но это не подготовка: оно репетирует провал и портит вход в контакт.",
+        question: "Что я уже успел напрокручивать — и стал ли я от этого хоть на шаг готовее?"
+      },
+      {
+        comment: "Превратим страх в проверяемый прогноз — с ним можно работать, в отличие от смутного ужаса.",
+        question: "Как, по моему прогнозу, пройдёт разговор — и насколько я уверен в этом прогнозе (в процентах)?"
+      },
+      {
+        comment: "Факт из исследований: люди систематически недооценивают, насколько понравились собеседнику, а разговоры с незнакомцами проходят лучше прогноза почти у всех.",
+        question: "Сколько моих прошлых страшных прогнозов о разговорах сбылось на самом деле?"
+      },
+      {
+        comment: "«Страховки» — заготовленные фразы, спрятанные глаза, телефон в руках, план побега — на деле ухудшают контакт и подкармливают страх.",
+        question: "Что я собираюсь делать «для подстраховки» — и от какой одной страховки я откажусь?"
+      },
+      {
+        comment: "Тревога разворачивает внимание внутрь: «как я выгляжу». Контакту помогает обратное — искренний интерес наружу.",
+        question: "Что мне будет интересно узнать или заметить в собеседнике?"
+      },
+      {
+        comment: "Цель «произвести впечатление» мне не подконтрольна. Подконтрольна цель-процесс: что я делаю.",
+        question: "Какая у меня цель-процесс в этом разговоре — что я буду делать, независимо от того, как меня воспримут?"
+      },
+      {
+        comment: "Больше всего страха живёт до первой фразы — дальше разговор везёт сам.",
+        question: "С чего я начну — какая будет первая фраза?"
+      }
+    ]
+  },
   longterm_goal: {
     title: "Цель без хватки",
     describeTitle: "Ваша долгосрочная цель",
@@ -628,6 +678,32 @@ const CATEGORIES = {
         question: "Если препятствие случится — что именно я сделаю? Запишите в форме «если …, то я …»"
       }
     ]
+  },
+  forecast: {
+    title: "Прогноз vs реальность",
+    mode: "experiment",
+    hidden: true,   // открывается кнопкой на стартовом экране (новый прогноз / проверка)
+    describeTitle: "Какой разговор предстоит?",
+    describePrompt: "Опишите своими словами: с кем и о чём предстоит поговорить, что пугает?",
+    scales: [
+      {
+        key: "outcome", invert: false,
+        before: "Как пройдёт разговор?", after: "Как разговор прошёл на самом деле?",
+        minLabel: "провал", maxLabel: "отлично"
+      },
+      {
+        key: "reject", invert: true,
+        before: "Насколько вероятно, что меня отвергнут или будет неловко?", after: "Насколько неловко или отвергающе было на самом деле?",
+        minLabel: "совсем нет", maxLabel: "наверняка"
+      },
+      {
+        key: "liked", invert: false,
+        before: "Насколько я понравлюсь собеседнику?", after: "Насколько я, судя по реакции, понравился?",
+        minLabel: "совсем нет", maxLabel: "очень"
+      }
+    ],
+    surpriseQuestion: "Что удивило — что оказалось не так, как вы ожидали?",
+    surprisePlaceholder: "Если ничего не удивило — так и напишите."
   },
   pre_step: {
     title: "Перед делом",
@@ -1018,6 +1094,7 @@ let idx = -1;
 let mode = "menu";  // menu | wizard | history | historyItem
 let historySession = null;  // сессия, открытая на экране historyItem (для повторной отправки)
 let activeGoal = null;      // карточка активной цели из CloudStorage (ключ "goal") — для «Перед делом»
+let activeExp = null;       // незавершённый эксперимент «Прогноз vs реальность» (CS-ключ "exp")
 const WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"];
 
 // ── Черновик (временное хранилище, отдельно от сохранённого в БД) ──────────
@@ -1044,6 +1121,74 @@ function sortItems() {
 }
 function rebuildSortPages() {
   pages = buildPagesFromCat(CATEGORIES[state.category]);
+}
+
+// ── Режим experiment («Прогноз vs реальность») ──────────────────────────────
+// Средний разрыв факт-прогноз по шкалам; плюс — реальность лучше прогноза
+function expGap(cat, before, after) {
+  let sum = 0;
+  cat.scales.forEach(s => {
+    const b = before[s.key] != null ? before[s.key] : 5;
+    const a = after[s.key] != null ? after[s.key] : 5;
+    sum += s.invert ? (b - a) : (a - b);
+  });
+  return sum / cat.scales.length;
+}
+function fmtGap(g) {
+  return String(Math.round(g * 10) / 10).replace(".", ",");
+}
+
+// Фаза «до» завершена: прогноз ждёт проверки в CS, в БД поедет вся пара после разговора
+async function finalizeForecast(vals) {
+  await csSetSession("exp", { t: String(Date.now()), d: (answers[0] || "").trim(), before: vals });
+  clearDraft();
+  tg.HapticFeedback.notificationOccurred("success");
+  mb.hide(); tg.BackButton.hide(); app.classList.remove("top");
+  app.innerHTML = `<div class="title">Прогноз записан 🔮</div>
+    <div class="subtitle">Теперь — разговор. Вернитесь после него: на главном экране будет кнопка «Проверить прогноз», сравним с фактом.</div>
+    <button class="cat-btn" id="exp-home">На главный экран</button>`;
+  document.getElementById("exp-home").onclick = () => transitionTo(renderCategory);
+}
+
+async function submitExperiment() {
+  const cat = CATEGORIES[state.category];
+  const before = (activeExp && activeExp.before) || {};
+  const afterIdx = pages.findIndex(p => p.type === "scales");
+  const after = answers[afterIdx] || {};
+  const surpriseIdx = pages.findIndex(p => p.type === "question");
+  const surprise = ((surpriseIdx >= 0 && answers[surpriseIdx]) || "").trim();
+  const gap = expGap(cat, before, after);
+  const out = [];
+  let num = 0;
+  cat.scales.forEach(s => {
+    num++;
+    out.push({ num, question: s.before, answer: String(before[s.key] != null ? before[s.key] : 5), role: "Прогноз" });
+  });
+  cat.scales.forEach(s => {
+    num++;
+    out.push({ num, question: s.after, answer: String(after[s.key] != null ? after[s.key] : 5), role: "Реальность" });
+  });
+  if (surprise) { num++; out.push({ num, question: cat.surpriseQuestion, answer: surprise, role: "Реальность" }); }
+  num++;
+  out.push({ num, question: "Разрыв (плюс — реальность лучше прогноза)", answer: (gap > 0 ? "+" : "") + fmtGap(gap), role: null });
+  const description = (activeExp && activeExp.d) || "";
+  // накопить статистику разрывов и закрыть эксперимент
+  const st = (await csGetSession("expstats")) || { n: 0, sum: 0 };
+  st.n += 1; st.sum += gap;
+  await csSetSession("expstats", st);
+  await csRemove("exp");
+  activeExp = null;
+  await saveToHistory(description, out);
+  const prepared = await prepareSendData({
+    category: state.category,
+    categoryTitle: state.categoryTitle,
+    description,
+    answers: out
+  });
+  if (!prepared) { sendFailAlert(); return; }
+  clearDraft();
+  tg.HapticFeedback.notificationOccurred("success");
+  tg.sendData(prepared);
 }
 
 // ── История сохранённых ответов (Telegram CloudStorage, своя у каждого юзера) ──
@@ -1454,6 +1599,17 @@ function buildPagesFromCat(cat) {
     cat.items.forEach((it, i) => {
       p.push({ type: "question", text: it.question, qnum: i + 1, placeholder: it.placeholder });
     });
+  } else if (cat.mode === "experiment") {
+    // две фазы: «до» — прогноз (сохраняется в CS и ждёт), «после» — факт + сравнение
+    const phase = (answers.exp && answers.exp.phase) || "before";
+    if (phase === "before") {
+      return [{ type: "describe" }, { type: "scales", phase: "before" }];
+    }
+    p.length = 0;
+    p.push({ type: "scales", phase: "after" });
+    p.push({ type: "question", text: cat.surpriseQuestion, qnum: 1, placeholder: cat.surprisePlaceholder });
+    p.push({ type: "compare" });
+    return p;
   } else {
     cat.items.forEach((it, i) => {
       p.push({ type: "comment", text: it.comment, qnum: i + 1 });
@@ -1486,7 +1642,7 @@ function renderCategory() {
   app.classList.remove("top");
   let html = `<div class="title">С какой проблемой поработаем?</div>
     <div class="subtitle">Выберите тему — дальше пройдём её по шагам.</div>
-    <div id="goal-slot"></div>`;
+    <div id="goal-slot"></div><div id="exp-slot"></div>`;
   for (const key in CATEGORIES) {
     if (CATEGORIES[key].hidden) continue;
     html += `<button class="cat-btn" data-cat="${key}">${CATEGORIES[key].title}</button>`;
@@ -1501,6 +1657,24 @@ function renderCategory() {
   const hb = app.querySelector("[data-history]");
   if (hb) hb.onclick = () => openHistory();
   renderGoalButton();
+  renderExpButton();
+}
+
+// Кнопка «Прогноз vs реальность» на стартовом экране: новый прогноз или проверка ждущего
+async function renderExpButton() {
+  const slot = document.getElementById("exp-slot");
+  if (!slot || !CS) return;
+  activeExp = await csGetSession("exp");
+  if (mode !== "menu") return;
+  if (activeExp) {
+    slot.innerHTML = `<button class="cat-btn" id="exp-go" style="box-shadow: inset 0 0 0 2px var(--btn)">⏳ Проверить прогноз
+      <span class="cat-sub">${esc((activeExp.d || "").slice(0, 60))}</span></button>`;
+    document.getElementById("exp-go").onclick = () => chooseCategory("forecast", { expPhase: "after" });
+  } else {
+    slot.innerHTML = `<button class="cat-btn" id="exp-go">🔮 Прогноз vs реальность
+      <span class="cat-sub">проверить страх перед разговором фактами</span></button>`;
+    document.getElementById("exp-go").onclick = () => chooseCategory("forecast", { expPhase: "before" });
+  }
 }
 
 // Кнопка «Перед делом» на стартовом экране — только при активной цели
@@ -1516,11 +1690,12 @@ async function renderGoalButton() {
   document.getElementById("goal-go").onclick = () => chooseCategory("pre_step");
 }
 
-function chooseCategory(key) {
+function chooseCategory(key, opts) {
   state.category = key;
   state.categoryTitle = CATEGORIES[key].title;
   mode = "wizard";
-  answers = {};              // до buildPages: страницы sort-режима строятся из answers.sort
+  answers = {};              // до buildPages: страницы sort/experiment-режимов строятся из answers
+  if (opts && opts.expPhase) answers.exp = { phase: opts.expPhase };
   pages = buildPages(key);
   idx = 0;
   saveDraft();
@@ -1559,7 +1734,7 @@ function renderCurrentPage() {
     }
     app.innerHTML = `
       ${head}
-      <div class="progress">Вопрос ${page.qnum} из ${total}</div>
+      ${total ? `<div class="progress">Вопрос ${page.qnum} из ${total}</div>` : ""}
       <div class="question">${page.text}</div>
       <textarea id="input" placeholder="${esc(page.placeholder || "Ваш ответ...")}"></textarea>
       <div class="err" id="err"></div>`;
@@ -1650,6 +1825,72 @@ function renderCurrentPage() {
     const el = document.getElementById("input");
     el.oninput = () => { it.reword = el.value; saveDraft(); };
     setupMainButton("Далее");
+  } else if (page.type === "scales") {
+    const isBefore = page.phase === "before";
+    const stored = answers[idx] || {};
+    let html = "";
+    if (isBefore) {
+      html += `<div class="situation"><b>Разговор</b>${esc(description)}</div>
+        <div class="question">Мой прогноз</div>
+        <p class="comment" style="margin-bottom:24px">Честный прогноз — это эксперимент: после разговора сравним его с фактом. Двигайте ползунки.</p>`;
+    } else {
+      html += `<div class="situation"><b>Разговор</b>${esc((activeExp && activeExp.d) || "")}</div>
+        <div class="question">Как было на самом деле?</div>
+        <p class="comment" style="margin-bottom:24px">Оценивайте по фактам — что реально произошло и как реагировал собеседник. Свой прогноз увидите на следующем шаге.</p>`;
+    }
+    cat.scales.forEach((s, i) => {
+      const v = stored[s.key] != null ? stored[s.key] : 5;
+      html += `<div class="scale-row">
+        <div class="scale-q">${esc(isBefore ? s.before : s.after)}</div>
+        <div class="scale-val" id="scale-val-${i}">${v}</div>
+        <input type="range" min="0" max="10" step="1" value="${v}" id="scale-${i}">
+        <div class="scale-ends"><span>${esc(s.minLabel)}</span><span>${esc(s.maxLabel)}</span></div>
+      </div>`;
+    });
+    app.innerHTML = html;
+    cat.scales.forEach((s, i) => {
+      const el = document.getElementById("scale-" + i);
+      el.oninput = () => {
+        document.getElementById("scale-val-" + i).textContent = el.value;
+        const cur = answers[idx] || {};
+        cur[s.key] = Number(el.value);
+        answers[idx] = cur;
+        saveDraft();
+      };
+    });
+    setupMainButton(isBefore ? "Записать прогноз" : "Далее");
+  } else if (page.type === "compare") {
+    const before = (activeExp && activeExp.before) || {};
+    const afterIdx = pages.findIndex(p => p.type === "scales");
+    const after = answers[afterIdx] || {};
+    const gap = expGap(cat, before, after);
+    let html = `<div class="progress">${esc(state.categoryTitle)}</div>
+      <div class="title" style="margin-bottom:6px">Прогноз против факта</div>
+      <div class="subtitle" style="margin-bottom:20px">Плюс — реальность оказалась лучше прогноза.</div>`;
+    cat.scales.forEach(s => {
+      const b = before[s.key] != null ? before[s.key] : 5;
+      const a = after[s.key] != null ? after[s.key] : 5;
+      const d = s.invert ? (b - a) : (a - b);
+      const cls = d > 0 ? "cmp-good" : (d < 0 ? "cmp-bad" : "");
+      html += `<div class="cmp-row">
+        <div class="cmp-q">${esc(s.before)}</div>
+        <div class="cmp-nums">${b} → ${a} <span class="cmp-gap ${cls}">(${d > 0 ? "+" : ""}${d})</span></div>
+      </div>`;
+    });
+    const cls = gap > 0 ? "cmp-good" : (gap < 0 ? "cmp-bad" : "");
+    html += `<div class="sum-block" style="margin-top:16px"><div class="sum-text">Итог этой проверки:
+      <b class="${cls}">${gap > 0 ? "реальность лучше прогноза на " + fmtGap(gap) : (gap < 0 ? "реальность хуже прогноза на " + fmtGap(-gap) : "прогноз совпал с реальностью")}</b></div></div>
+      <div id="exp-stats"></div>`;
+    app.innerHTML = html;
+    (async () => {
+      const st = await csGetSession("expstats");
+      const box = document.getElementById("exp-stats");
+      if (box && st && st.n > 0) {
+        const avg = st.sum / st.n;
+        box.innerHTML = `<div class="hint-line">По вашим прошлым проверкам (${st.n}): прогноз в среднем ${avg > 0.05 ? "мрачнее реальности на " + fmtGap(avg) : (avg < -0.05 ? "оптимистичнее реальности на " + fmtGap(-avg) : "совпадает с реальностью")}.</div>`;
+      }
+    })();
+    setupMainButton("Сохранить");
   } else if (page.type === "weekday") {
     let html = `<div class="question">День пересмотра цели</div>
       <p class="comment" style="margin-bottom:20px">Цель полезно трогать редко и по расписанию: в назначенный день — пересматриваю (10 минут), в остальные — только текущий шаг. Бот напомнит.</p>`;
@@ -1811,6 +2052,17 @@ function handleNext() {
     if (!(sortItems()[page.i].reword || "").trim()) return showError("Напишите переформулировку, чтобы продолжить");
   } else if (page.type === "weekday") {
     if (!answers[idx]) return showError("Выберите день пересмотра");
+  } else if (page.type === "scales") {
+    const vals = {};
+    CATEGORIES[state.category].scales.forEach(s => {
+      const cur = answers[idx] || {};
+      vals[s.key] = cur[s.key] != null ? cur[s.key] : 5;
+    });
+    answers[idx] = vals;
+    if (page.phase === "before") { finalizeForecast(vals); return; }
+  } else if (page.type === "compare") {
+    submitExperiment();
+    return;
   } else if (page.type === "summary") {
     submit();
     return;
@@ -2007,6 +2259,9 @@ async function init() {
     mode = "wizard";
     answers = draft.answers || {};   // до buildPages: sort-страницы строятся из answers.sort
     if (CATEGORIES[draft.category].mode === "practice") activeGoal = await csGetSession("goal");
+    if (CATEGORIES[draft.category].mode === "experiment" && answers.exp && answers.exp.phase === "after") {
+      activeExp = await csGetSession("exp");
+    }
     pages = buildPages(draft.category);
     idx = (typeof draft.idx === "number" && draft.idx >= 0 && draft.idx < pages.length) ? draft.idx : 0;
     renderCurrentPage();
